@@ -1,0 +1,6 @@
+data/
+logs/
+
+*.mp4
+*.pdf
+*.md
