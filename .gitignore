@@ -1,5 +1,7 @@
 data/
 logs/
+results/
+__pycache__/
 
 *.mp4
 *.pdf
