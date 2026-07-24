@@ -1,0 +1,96 @@
+# @package _global_
+# Continuous-control PointGoal navigation (smooth velocity control) trained with PPO via habitat-baselines.
+# Compose: PointNav HM3D task/dataset + RGB-only agent + built-in velocity_control action (discrete actions
+# removed) + our smoothness reward measure + the baselines RL trainer. See docs/rl/pointnav.md.
+defaults:
+  - /benchmark/nav/pointnav: pointnav_hm3d
+  # Continuous velocity action + our composite smoothness/collision reward measure.
+  - /habitat/task/actions@habitat.task.actions.velocity_control: velocity_control
+  - /habitat/task/measurements@habitat.task.measurements.pointnav_smooth_reward: pointnav_smooth_reward
+  - /habitat/task/measurements@habitat.task.measurements.collisions: collisions  # logged for eval (collision rate)
+  - /habitat_baselines: habitat_baselines_rl_config_base
+  - _self_
+
+# NOTE: scripts/train_pointnav.py post-processes this composed config (see prepare_config):
+#   - removes the default discrete actions (stop/move_forward/turn_left/turn_right) so the action space
+#     is purely continuous velocity_control;
+#   - drops the depth sensor for the default RGB-only policy (--modality depth|rgbd keeps/uses it).
+# Doing this in code is far more robust than Hydra defaults-list deletion / sensor-setup overrides, which
+# fight pointnav_hm3d re-adding the depth sensor in its body.
+
+habitat:
+  environment:
+    max_episode_steps: 500
+  task:
+    reward_measure: pointnav_smooth_reward
+    success_measure: success
+    actions:
+      velocity_control:
+        type: SmoothVelocityAction     # array-tolerant subclass of the built-in VelocityAction (foresight.rl)
+        lin_vel_range: [0.0, 0.25]     # m/s (forward)
+        ang_vel_range: [-10.0, 10.0]   # deg/s (yaw)
+        min_abs_lin_speed: 0.025       # below this (and min ang) -> stop is called
+        min_abs_ang_speed: 1.0
+        time_step: 1.0                 # s integrated per env step
+    measurements:
+      pointnav_smooth_reward:
+        collision_penalty: 0.01
+        angular_penalty: 0.004
+        jerk_penalty: 0.004
+  simulator:
+    scene_dataset: data/processed/scene_datasets/hm3d/minival/hm3d_minival_basis_pointnav.scene_dataset_config.json
+    habitat_sim_v0:
+      allow_sliding: true              # slide along walls on contact -> smoother, fewer hard stops
+    agents:
+      main_agent:
+        sim_sensors:
+          rgb_sensor:
+            width: 256
+            height: 256
+  dataset:
+    scenes_dir: data/processed/scene_datasets
+    data_path: data/processed/pointnav_episodes/{split}/{split}.json.gz
+    split: train
+
+habitat_baselines:
+  trainer_name: ppo
+  torch_gpu_id: 0
+  tensorboard_dir: results/runs/pointnav/tb
+  video_dir: results/runs/pointnav/video
+  checkpoint_folder: results/runs/pointnav/checkpoints
+  log_file: results/runs/pointnav/train.log
+  num_environments: 4                  # sized for an 8 GB RTX 4060 laptop GPU
+  log_interval: 10
+  num_updates: -1
+  total_num_steps: 1.0e7               # ceiling; rely on checkpoints, resumable
+  num_checkpoints: 25
+  force_torch_single_threaded: true
+  eval:
+    split: val
+  rl:
+    policy:
+      main_agent:
+        name: PointNavResNetPolicy
+        action_distribution_type: gaussian   # continuous action space
+    ppo:
+      clip_param: 0.2
+      ppo_epoch: 2
+      num_mini_batch: 2
+      value_loss_coef: 0.5
+      entropy_coef: 0.01
+      lr: 2.5e-4
+      eps: 1.0e-5
+      max_grad_norm: 0.2
+      num_steps: 128
+      hidden_size: 512
+      use_gae: true
+      gamma: 0.99
+      tau: 0.95
+      use_linear_lr_decay: false
+      use_normalized_advantage: false
+    ddppo:
+      rnn_type: GRU
+      num_recurrent_layers: 1
+      backbone: resnet18
+      train_encoder: true
+      reset_critic: true
