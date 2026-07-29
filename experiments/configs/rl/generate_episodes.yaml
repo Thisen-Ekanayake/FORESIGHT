@@ -1,0 +1,38 @@
+# Script config for scripts/generate_pointnav_episodes.py — plain YAML (PyYAML), NOT a Hydra config.
+# Holds every value the script would otherwise hardcode. Override from the CLI with
+#   --set splits.train.num_episodes_per_scene=300 --set splits.val.num_episodes_per_scene=30
+
+# Scene discovery. scenes_dir must match habitat.dataset.scenes_dir in pointnav_continuous.yaml:
+# episode.scene_id is stored relative to it and habitat joins the two (PointNavDatasetV1.from_json)
+# to locate the scene mesh.
+scenes_root: data/processed/scene_datasets/hm3d/minival
+scenes_dir: data/processed/scene_datasets
+scene_mesh_glob: "*.basis.glb"
+# PointNav needs no semantics; this config registers all 10 minival basis meshes (the annotated config
+# registers only the 4 semantic scenes). See data/README.md for the distinction.
+scene_dataset: data/processed/scene_datasets/hm3d/minival/hm3d_minival_basis_pointnav.scene_dataset_config.json
+# Scene handles (e.g. ["00800-TEEsavR23oF"]); null = every subdir of scenes_root holding a scene_mesh_glob.
+scenes: null
+
+# Hydra config the per-scene simulator is built from (only the simulator section is used).
+sim_config: benchmark/nav/pointnav/pointnav_hm3d.yaml
+seed: 1
+
+# Output. Splits are filled in order from each scene's sampled episodes, so they stay disjoint:
+# the first `num_episodes_per_scene` go to train, the next to val.
+out: data/processed/pointnav_episodes
+splits:
+  train:
+    num_episodes_per_scene: 400
+    out_file: train/train.json.gz
+  val:
+    num_episodes_per_scene: 40
+    out_file: val/val.json.gz
+
+# habitat-lab's generate_pointnav_episode sampling constraints.
+sampling:
+  closest_dist_limit: 1.0        # m, min geodesic start->goal distance
+  furthest_dist_limit: 25.0      # m, max geodesic start->goal distance
+  geodesic_to_euclid_min_ratio: 1.1   # >1 keeps trivially straight-line episodes out
+
+episode_id_format: "{scene}_{index}"

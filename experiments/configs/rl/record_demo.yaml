@@ -1,0 +1,59 @@
+# Script config for scripts/record_pointnav_demo.py — plain YAML (PyYAML), NOT a Hydra config.
+# Holds every value the script would otherwise hardcode. Override from the CLI with
+#   --set render.duration=15 --set render.fps=50 --set episode_index=3
+
+# The Hydra config the rollout env is built from (same one training used).
+habitat_config:
+  config_name: rl/pointnav_continuous.yaml
+  configs_dir: experiments/configs
+
+# habitat-baselines checkpoint to roll out (--ckpt overrides).
+ckpt: results/runs/pointnav/checkpoints/latest.pth
+# Older habitat-baselines versions prefix the actor-critic state_dict keys; stripped if present.
+state_dict_prefix: "actor_critic."
+device: auto                     # auto -> cuda when available, else cpu; or "cuda" / "cpu" / "cuda:1"
+
+# Same post-processing as training (see train_pointnav.yaml): purely continuous action space + modality.
+modality: rgb
+modalities:
+  rgb: [depth_sensor]
+  depth: [rgb_sensor]
+  rgbd: []
+discrete_actions: [stop, move_forward, turn_left, turn_right]
+
+# Episode selection.
+split: val
+episode_index: 0                 # which episode of the split to record
+
+rollout:
+  max_steps: 500
+  deterministic: true            # take the distribution mean; false = sample actions
+
+render:
+  # >0 interpolates the trajectory to duration*fps smooth frames (lerp + slerp), like demo_1; 0 renders
+  # one frame per env step.
+  duration: 0.0
+  fps: 30
+  panel_w: 720                   # top-down panel size, px
+  panel_h: 720
+  meters_per_pixel: 0.05         # top-down map resolution
+  left_label: "First-person RGB"
+  right_label: "Top-down map  ·  RL PointGoal policy (blue) vs geodesic-optimal"
+  frames_dirname: frames
+  frame_name_format: "frame_{index:05d}.png"
+  keep_frames: false             # keep the PNG frames after encoding
+
+video:
+  filename_format: "pointnav_{episode_id}.mp4"
+  # ffmpeg's printf-style input pattern — must match render.frame_name_format above.
+  input_pattern: "frame_%05d.png"
+  ffmpeg:
+    binary: ffmpeg
+    codec: libx264
+    preset: slow
+    crf: 17
+    pix_fmt: yuv420p
+    movflags: +faststart
+
+out: results/runs/pointnav/demo
+metrics_file: metrics.json

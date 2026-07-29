@@ -6,7 +6,10 @@ side-by-side layout (first-person left, top-down map right) reusing src/foresigh
 trajectory is the traced path, the geodesic-optimal route is drawn faintly for reference, red marker = goal.
 Motion is smoothed the same way as demo_1: keyframe poses are interpolated (lerp + slerp) and re-rendered.
 
-  DISPLAY=:1 <py> scripts/record_pointnav_demo.py --ckpt results/runs/pointnav/checkpoints/latest.pth
+Every value lives in experiments/configs/rl/record_demo.yaml — override with `--set KEY=VALUE`.
+
+  DISPLAY=:1 <py> scripts/record_pointnav_demo.py --ckpt results/runs/pointnav/checkpoints/latest.pth \
+      --set episode_index=0 --set render.duration=15 --set render.fps=50
 """
 import argparse
 import json
@@ -21,6 +24,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import foresight.rl  # noqa: F401  registers the reward measure + continuous velocity action
+from foresight.rl.config import choice, get, load_config, override
 
 import habitat
 import habitat_sim
@@ -33,18 +37,19 @@ from habitat_baselines.utils.common import batch_obs
 from foresight.sim.navigate import _resample_track
 from foresight.viz.render import compose_frame, render_topdown_panel
 
-DISCRETE_ACTIONS = ["stop", "move_forward", "turn_left", "turn_right"]
+# Only literal in this script: where its config lives (relative to the repo root).
+SCRIPT_CONFIG = "experiments/configs/rl/record_demo.yaml"
 
 
-def load_policy(ckpt_path, observation_space, action_space, device):
+def load_policy(ckpt_path, observation_space, action_space, device, state_dict_prefix):
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     config = ckpt["config"]
     policy_cls = baseline_registry.get_policy(config.habitat_baselines.rl.policy.main_agent.name)
     policy = policy_cls.from_config(config, observation_space, action_space)
     # This habitat-baselines version saves the actor-critic state_dict directly (keys net.*/critic.*/
-    # action_distribution.*); older ones prefix with "actor_critic." — strip it if present.
+    # action_distribution.*); older ones prefix with state_dict_prefix — strip it if present.
     state = {
-        (k[len("actor_critic."):] if k.startswith("actor_critic.") else k): v
+        (k[len(state_dict_prefix):] if k.startswith(state_dict_prefix) else k): v
         for k, v in ckpt["state_dict"].items()
     }
     policy.load_state_dict(state)
@@ -91,59 +96,70 @@ def rollout(env, policy, hidden_size, device, deterministic, max_steps):
     return positions, rotations, env.get_metrics()
 
 
-def encode_video(frames_dir, out_path, fps):
-    cmd = ["ffmpeg", "-y", "-framerate", str(fps), "-i", str(frames_dir / "frame_%05d.png"),
-           "-c:v", "libx264", "-preset", "slow", "-crf", "17", "-pix_fmt", "yuv420p",
-           "-movflags", "+faststart", str(out_path)]
+def encode_video(frames_dir, input_pattern, out_path, fps, ffmpeg):
+    cmd = [ffmpeg["binary"], "-y", "-framerate", str(fps), "-i", str(frames_dir / input_pattern),
+           "-c:v", ffmpeg["codec"], "-preset", ffmpeg["preset"], "-crf", str(ffmpeg["crf"]),
+           "-pix_fmt", ffmpeg["pix_fmt"], "-movflags", ffmpeg["movflags"], str(out_path)]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--ckpt", required=True, help="habitat-baselines checkpoint (.pth)")
-    p.add_argument("--config-name", default="rl/pointnav_continuous.yaml")
-    p.add_argument("--configs-dir", default="experiments/configs")
-    p.add_argument("--modality", choices=["rgb", "depth", "rgbd"], default="rgb")
-    p.add_argument("--split", default="val")
-    p.add_argument("--episode-index", type=int, default=0, help="Which episode in the split to record")
-    p.add_argument("--out", default="results/runs/pointnav/demo")
-    p.add_argument("--max-steps", type=int, default=500)
-    p.add_argument("--stochastic", action="store_true", help="Sample actions instead of taking the mean")
-    p.add_argument("--fps", type=int, default=30)
-    p.add_argument("--duration", type=float, default=0.0,
-                   help="If >0, interpolate the trajectory to duration*fps smooth frames (like demo_1)")
-    p.add_argument("--panel", type=int, default=720)
-    p.add_argument("--mpp", type=float, default=0.05)
-    p.add_argument("--keep-frames", action="store_true")
+    p.add_argument("--config", default=SCRIPT_CONFIG, help="Script config (YAML) holding all defaults")
+    p.add_argument("--set", nargs="*", default=[], metavar="KEY=VALUE",
+                   help="Override script-config keys, e.g. render.duration=15 render.fps=50")
+    p.add_argument("--ckpt", default=None, help="habitat-baselines checkpoint (.pth)")
+    p.add_argument("--modality", default=None, help="Visual input (see `modalities` in the config)")
+    p.add_argument("--split", default=None)
+    p.add_argument("--episode-index", type=int, default=None, help="Which episode in the split to record")
+    p.add_argument("--out", default=None)
     args = p.parse_args()
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    cfg = load_config(args.config, args.set)
+    override(cfg, "ckpt", args.ckpt)
+    override(cfg, "modality", args.modality)
+    override(cfg, "split", args.split)
+    override(cfg, "episode_index", args.episode_index)
+    override(cfg, "out", args.out)
 
-    cfg = get_config(args.config_name, configs_dir=args.configs_dir)
-    with read_write(cfg):
-        cfg.habitat.dataset.split = args.split
-        for a in DISCRETE_ACTIONS:
-            cfg.habitat.task.actions.pop(a, None)
-        sensors = cfg.habitat.simulator.agents.main_agent.sim_sensors
-        if args.modality == "rgb":
-            sensors.pop("depth_sensor", None)
-        elif args.modality == "depth":
-            sensors.pop("rgb_sensor", None)
+    modality = choice(cfg, "modality", get(cfg, "modality"), get(cfg, "modalities"))
+    render_cfg = get(cfg, "render")
+    fps = render_cfg["fps"]
+    mpp = render_cfg["meters_per_pixel"]
 
-    env = habitat.Env(config=cfg.habitat)
-    policy, hidden_size = load_policy(args.ckpt, env.observation_space, create_action_space(env.action_space), device)
+    device_cfg = get(cfg, "device")
+    device = torch.device(
+        ("cuda" if torch.cuda.is_available() else "cpu") if device_cfg == "auto" else device_cfg
+    )
+
+    habitat_cfg = get(cfg, "habitat_config")
+    hab = get_config(habitat_cfg["config_name"], configs_dir=habitat_cfg["configs_dir"])
+    with read_write(hab):
+        hab.habitat.dataset.split = get(cfg, "split")
+        for action in get(cfg, "discrete_actions"):
+            hab.habitat.task.actions.pop(action, None)
+        sensors = hab.habitat.simulator.agents.main_agent.sim_sensors
+        for sensor in get(cfg, "modalities")[modality]:
+            sensors.pop(sensor, None)
+
+    env = habitat.Env(config=hab.habitat)
+    policy, hidden_size = load_policy(
+        get(cfg, "ckpt"), env.observation_space, create_action_space(env.action_space),
+        device, get(cfg, "state_dict_prefix"),
+    )
 
     # Advance the episode iterator to the requested index.
-    for _ in range(args.episode_index):
+    for _ in range(get(cfg, "episode_index")):
         env.reset()
     positions, rotations, metrics = rollout(
-        env, policy, hidden_size, device, deterministic=not args.stochastic, max_steps=args.max_steps
+        env, policy, hidden_size, device,
+        deterministic=get(cfg, "rollout.deterministic"), max_steps=get(cfg, "rollout.max_steps"),
     )
     episode = env.current_episode
     start = np.asarray(episode.start_position, np.float32)
     goal = np.asarray(episode.goals[0].position, np.float32)
     planned = geodesic_path(env.sim.pathfinder, start, goal)
-    topdown = np.asarray(env.sim.pathfinder.get_topdown_view(args.mpp, float(start[1])), dtype=bool)
+    topdown = np.asarray(env.sim.pathfinder.get_topdown_view(mpp, float(start[1])), dtype=bool)
     bmin, _ = env.sim.pathfinder.get_bounds()
     bmin = np.asarray(bmin, np.float32)
 
@@ -154,14 +170,15 @@ def main():
           f"steps={len(positions) - 1} geodesic={metrics.get('distance_to_goal'):.2f}m-to-goal-at-end")
 
     # Smooth (optional): interpolate keyframe poses and re-render RGB at each, like demo_1.
-    if args.duration > 0:
-        n_frames = round(args.duration * args.fps)
+    duration = render_cfg["duration"]
+    if duration > 0:
+        n_frames = round(duration * fps)
         frame_pos, frame_rot = _resample_track(positions, rotations, n_frames)
     else:
         frame_pos, frame_rot = positions, rotations
 
-    out_dir = Path(args.out)
-    frames_dir = out_dir / "frames"
+    out_dir = Path(get(cfg, "out"))
+    frames_dir = out_dir / render_cfg["frames_dirname"]
     frames_dir.mkdir(parents=True, exist_ok=True)
 
     n = len(frame_pos)
@@ -170,24 +187,23 @@ def main():
         obs = env.sim.get_observations_at(pos, rot, keep_agent_at_new_pose=False)
         rgb = np.asarray(obs["rgb"][..., :3], dtype=np.uint8)
         panel = render_topdown_panel(
-            topdown=topdown, bounds_min=bmin, mpp=args.mpp,
+            topdown=topdown, bounds_min=bmin, mpp=mpp,
             planned_path=planned, traveled=np.stack(frame_pos[: i + 1]),
-            start=start, goal=goal, panel_w=args.panel, panel_h=args.panel,
+            start=start, goal=goal, panel_w=render_cfg["panel_w"], panel_h=render_cfg["panel_h"],
         )
-        frame = compose_frame(rgb, panel, "First-person RGB",
-                              "Top-down map  ·  RL PointGoal policy (blue) vs geodesic-optimal")
-        frame.save(frames_dir / f"frame_{i:05d}.png")
+        frame = compose_frame(rgb, panel, render_cfg["left_label"], render_cfg["right_label"])
+        frame.save(frames_dir / render_cfg["frame_name_format"].format(index=i))
 
-    out_video = out_dir / f"pointnav_{episode.episode_id}.mp4"
-    encode_video(frames_dir, out_video, args.fps)
-    if not args.keep_frames:
+    out_video = out_dir / get(cfg, "video.filename_format").format(episode_id=episode.episode_id)
+    encode_video(frames_dir, get(cfg, "video.input_pattern"), out_video, fps, get(cfg, "video.ffmpeg"))
+    if not render_cfg["keep_frames"]:
         shutil.rmtree(frames_dir)
 
-    (out_dir / "metrics.json").write_text(json.dumps(
+    (out_dir / get(cfg, "metrics_file")).write_text(json.dumps(
         {"episode_id": episode.episode_id, "success": success, "spl": spl,
          "collisions": collisions, "steps": len(positions) - 1}, indent=2))
     env.close()
-    print(f"Done: {out_video} ({n} frames, {n / args.fps:.1f}s @ {args.fps} fps)")
+    print(f"Done: {out_video} ({n} frames, {n / fps:.1f}s @ {fps} fps)")
 
 
 if __name__ == "__main__":

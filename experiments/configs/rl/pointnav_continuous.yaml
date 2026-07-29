@@ -11,7 +11,8 @@ defaults:
   - /habitat_baselines: habitat_baselines_rl_config_base
   - _self_
 
-# NOTE: scripts/train_pointnav.py post-processes this composed config (see prepare_config):
+# NOTE: scripts/train_pointnav.py post-processes this composed config (see prepare_config), driven by the
+# script config experiments/configs/rl/train_pointnav.yaml (`discrete_actions`, `modality`/`modalities`):
 #   - removes the default discrete actions (stop/move_forward/turn_left/turn_right) so the action space
 #     is purely continuous velocity_control;
 #   - drops the depth sensor for the default RGB-only policy (--modality depth|rgbd keeps/uses it).
@@ -28,7 +29,7 @@ habitat:
       velocity_control:
         type: SmoothVelocityAction     # array-tolerant subclass of the built-in VelocityAction (foresight.rl)
         lin_vel_range: [0.0, 0.25]     # m/s (forward)
-        ang_vel_range: [-10.0, 10.0]   # deg/s (yaw)
+        ang_vel_range: [-20.0, 20.0]   # deg/s (yaw)
         min_abs_lin_speed: 0.025       # below this (and min ang) -> stop is called
         min_abs_ang_speed: 1.0
         time_step: 1.0                 # s integrated per env step

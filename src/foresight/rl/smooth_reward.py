@@ -22,6 +22,7 @@ from habitat.core.embodied_task import EmbodiedTask, Measure
 from habitat.core.registry import registry
 from habitat.tasks.nav.nav import DistanceToGoal
 from hydra.core.config_store import ConfigStore
+from omegaconf import MISSING
 
 
 @registry.register_measure
@@ -77,10 +78,14 @@ class PointNavSmoothReward(Measure):
 
 @dataclass
 class PointNavSmoothRewardMeasurementConfig(MeasurementConfig):
+    """Schema only — the weights are MISSING here on purpose so the values live in the YAML config
+    (`habitat.task.measurements.pointnav_smooth_reward` in experiments/configs/rl/pointnav_continuous.yaml)
+    rather than being duplicated in code. Composing without them fails loudly."""
+
     type: str = "PointNavSmoothReward"
-    collision_penalty: float = 0.01  # per colliding step
-    angular_penalty: float = 0.004   # per unit |angular_velocity| (action in [-1, 1])
-    jerk_penalty: float = 0.004      # per unit L1 change in (linear, angular) between steps
+    collision_penalty: float = MISSING  # per colliding step
+    angular_penalty: float = MISSING    # per unit |angular_velocity| (action in [-1, 1])
+    jerk_penalty: float = MISSING       # per unit L1 change in (linear, angular) between steps
 
 
 ConfigStore.instance().store(
