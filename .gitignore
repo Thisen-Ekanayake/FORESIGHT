@@ -1,6 +1,7 @@
 data/
 logs/
 results/
+models/
 __pycache__/
 
 *.mp4
