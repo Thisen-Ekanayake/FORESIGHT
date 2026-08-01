@@ -59,6 +59,7 @@ habitat_baselines:
   tensorboard_dir: results/runs/pointnav/tb
   video_dir: results/runs/pointnav/video
   checkpoint_folder: results/runs/pointnav/checkpoints
+  eval_ckpt_path_dir: results/runs/pointnav/checkpoints/latest.pth  # what --eval scores (a dir evaluates every ckpt in it)
   log_file: results/runs/pointnav/train.log
   num_environments: 4                  # sized for an 8 GB RTX 4060 laptop GPU
   log_interval: 10

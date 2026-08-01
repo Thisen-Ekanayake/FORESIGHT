@@ -25,6 +25,9 @@ import os
 import sys
 from pathlib import Path
 
+import torch
+from omegaconf import OmegaConf
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import foresight.rl  # noqa: F401  (registers the reward measure + continuous velocity action)
 from foresight.rl.config import choice, get, load_config, override
@@ -57,6 +60,28 @@ def prepare_config(cfg, script_cfg):
     return cfg
 
 
+def warn_on_eval_config_drift(cfg, script_cfg):
+    """Warn when scoring a checkpoint under a different environment than it was trained in.
+
+    Eval composes the env from this config (load_resume_state_config=False, see the config), so an edit
+    made to the YAML after training silently changes the dynamics the policy is scored under. Compare the
+    sections listed in `eval_config_check` against the config stored in the checkpoint.
+    """
+    paths = list(get(script_cfg, "eval_config_check"))
+    ckpt_path = Path(cfg.habitat_baselines.eval_ckpt_path_dir)
+    if not paths or not ckpt_path.is_file():
+        return
+    stored = torch.load(ckpt_path, map_location="cpu", weights_only=False).get("config")
+    if stored is None:
+        return
+    for path in paths:
+        trained, live = OmegaConf.select(stored, path), OmegaConf.select(cfg, path)
+        if trained != live:
+            print(f"[train_pointnav] WARNING: {path} differs from the checkpoint's training config\n"
+                  f"    trained with: {trained}\n"
+                  f"    scoring with: {live}")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--config", default=SCRIPT_CONFIG, help="Script config (YAML) holding all defaults")
@@ -78,7 +103,7 @@ def main():
     evaluate = bool(get(script_cfg, "eval"))
     overrides = list(get(script_cfg, "habitat_overrides")) + list(args.habitat_set)
     if evaluate:
-        overrides.append(get(script_cfg, "eval_override"))
+        overrides.extend(get(script_cfg, "eval_overrides"))
 
     cfg = get_config(
         get(script_cfg, "habitat_config.config_name"),
@@ -93,6 +118,8 @@ def main():
     print(f"[train_pointnav] actions={actions} sensors={sensors} modality={modality}")
     expected = list(get(script_cfg, "expected_actions"))
     assert actions == expected, f"expected only {expected}, got {actions}"
+    if evaluate:
+        warn_on_eval_config_drift(cfg, script_cfg)
 
     # The trainer opens the log file before creating its own dirs — make output dirs exist first.
     hb = cfg.habitat_baselines
