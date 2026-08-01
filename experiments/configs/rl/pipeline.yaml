@@ -1,0 +1,37 @@
+# Runner config for scripts/run_rl_pipeline.sh — the PointGoal RL pipeline end to end.
+# Every value the runner uses lives here; the shell script holds only the path of this file.
+# Per-stage settings live in each stage's own config (generate_episodes.yaml, train_pointnav.yaml,
+# record_demo.yaml, pointnav_continuous.yaml) — edit those, or add CLI overrides to `args` below.
+
+# `conda activate` is broken in this environment, so the habitat interpreter is called directly.
+python: /home/thisen-ekanayake/miniforge3/envs/habitat/bin/python
+display: ":1"                      # X display habitat renders on (GPU rendering needs one)
+log_dir: results/runs/pointnav/pipeline   # per-stage logs land here as <stage>.log
+
+# Stages, run in this order. Subset with: scripts/run_rl_pipeline.sh --stages train,demo
+stages: [episodes, train, eval, demo]
+
+episodes:
+  description: Sample PointGoal start/goal episodes for the local HM3D scenes
+  script: scripts/generate_pointnav_episodes.py
+  args: []                         # e.g. ["--set", "splits.train.num_episodes_per_scene=300"]
+  # Generation is a one-off, so the stage is skipped when this exists (--force regenerates).
+  skip_if_exists: data/processed/pointnav_episodes/train/train.json.gz
+
+train:
+  description: Train the continuous-control navigator with PPO (resumable from the latest checkpoint)
+  script: scripts/train_pointnav.py
+  args: []                         # e.g. ["--habitat-set", "habitat_baselines.total_num_steps=2000"]
+  skip_if_exists: null
+
+eval:
+  description: Score the checkpoint on the val split (success / SPL / collisions)
+  script: scripts/train_pointnav.py
+  args: ["--eval"]                 # checkpoint comes from habitat_baselines.eval_ckpt_path_dir
+  skip_if_exists: null
+
+demo:
+  description: Roll out the checkpoint into a demo clip + metrics.json
+  script: scripts/record_pointnav_demo.py
+  args: []                         # checkpoint/episode/render settings come from record_demo.yaml
+  skip_if_exists: null

@@ -1,0 +1,53 @@
+# Script config for scripts/train_pointnav.py — plain YAML (PyYAML), NOT a Hydra config.
+# Holds every value the script would otherwise hardcode; the task/PPO hyperparameters live in the Hydra
+# config named below (pointnav_continuous.yaml). Override any key from the CLI with
+#   --set modality=depth --set eval=true
+# and pass extra Hydra overrides for the habitat config with --habitat-set (or `habitat_overrides` here).
+
+# The Hydra config composed by habitat_baselines.config.default.get_config.
+habitat_config:
+  config_name: rl/pointnav_continuous.yaml
+  configs_dir: experiments/configs
+
+# Extra Hydra overrides applied to that config, e.g. ["habitat_baselines.total_num_steps=2000"].
+# --habitat-set VALUES are appended to this list.
+habitat_overrides: []
+
+# Evaluate a checkpoint instead of training (--eval sets this to true). The overrides below are applied
+# to the habitat config when it is:
+#   - evaluate=True switches habitat-baselines into eval mode;
+#   - load_resume_state_config=False makes eval use THIS config instead of the copy stored inside the
+#     checkpoint. That stored copy has the `collisions` measure stripped — the PPO trainer removes
+#     non-scalar measures when training (ppo_trainer._init_train) — so with the default (True) the
+#     collision rate is silently missing from the eval metrics. Training keeps the default so that
+#     resuming a run still reuses the original config.
+eval: false
+eval_overrides:
+  - habitat_baselines.evaluate=True
+  - habitat_baselines.load_resume_state_config=False
+
+# Because of load_resume_state_config=False above, eval runs the environment from THIS config, not the
+# copy inside the checkpoint. These sections decide the dynamics and observations the policy was trained
+# under, so the script warns when they differ from the checkpoint's. Empty list disables the check.
+eval_config_check:
+  - habitat.task.actions
+  - habitat.simulator.agents.main_agent.sim_sensors
+  - habitat.environment.max_episode_steps
+
+# Visual input for the policy. rgb matches the project's RGB-first thesis; depth/rgbd are stronger but
+# off-thesis. `modalities` maps each choice to the sim_sensors removed from the composed config —
+# done in code (see prepare_config) because pointnav_hm3d re-adds the depth sensor in its own body.
+modality: rgb
+modalities:
+  rgb: [depth_sensor]
+  depth: [rgb_sensor]
+  rgbd: []
+
+# Discrete actions removed so the action space is purely continuous velocity control, and the action
+# set the script asserts is left afterwards.
+discrete_actions: [stop, move_forward, turn_left, turn_right]
+expected_actions: [velocity_control]
+
+# Override habitat.dataset.data_path — set here rather than as a Hydra override because it contains
+# `{split}` braces the Hydra CLI parser rejects. null = keep whatever the Hydra config specifies.
+data_path: null
