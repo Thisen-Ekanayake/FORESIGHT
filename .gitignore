@@ -3,6 +3,8 @@ logs/
 results/
 models/
 __pycache__/
+CLAUDE.md
+PROGRESS.md
 
 *.mp4
 *.pdf
