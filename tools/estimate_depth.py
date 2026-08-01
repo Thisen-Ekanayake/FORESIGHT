@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from foresight.sim.perception.depth.depth_anything import DEFAULT_MODEL, ZeroShotDepthEstimator
+from foresight.perception.depth.depth_anything import DEFAULT_MODEL, ZeroShotDepthEstimator
 
 
 def colorize_depth(depth: np.ndarray, max_depth_m: float) -> Image.Image:

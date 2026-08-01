@@ -13,25 +13,25 @@ stages: [episodes, train, eval, demo]
 
 episodes:
   description: Sample PointGoal start/goal episodes for the local HM3D scenes
-  script: scripts/generate_pointnav_episodes.py
+  script: tools/generate_pointnav_episodes.py
   args: []                         # e.g. ["--set", "splits.train.num_episodes_per_scene=300"]
   # Generation is a one-off, so the stage is skipped when this exists (--force regenerates).
   skip_if_exists: data/processed/pointnav_episodes/train/train.json.gz
 
 train:
   description: Train the continuous-control navigator with PPO (resumable from the latest checkpoint)
-  script: scripts/train_pointnav.py
+  script: tools/train_pointnav.py
   args: []                         # e.g. ["--habitat-set", "habitat_baselines.total_num_steps=2000"]
   skip_if_exists: null
 
 eval:
   description: Score the checkpoint on the val split (success / SPL / collisions)
-  script: scripts/train_pointnav.py
+  script: tools/train_pointnav.py
   args: ["--eval"]                 # checkpoint comes from habitat_baselines.eval_ckpt_path_dir
   skip_if_exists: null
 
 demo:
   description: Roll out the checkpoint into a demo clip + metrics.json
-  script: scripts/record_pointnav_demo.py
+  script: tools/record_pointnav_demo.py
   args: []                         # checkpoint/episode/render settings come from record_demo.yaml
   skip_if_exists: null

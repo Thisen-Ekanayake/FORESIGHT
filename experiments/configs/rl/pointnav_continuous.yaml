@@ -11,7 +11,7 @@ defaults:
   - /habitat_baselines: habitat_baselines_rl_config_base
   - _self_
 
-# NOTE: scripts/train_pointnav.py post-processes this composed config (see prepare_config), driven by the
+# NOTE: tools/train_pointnav.py post-processes this composed config (see prepare_config), driven by the
 # script config experiments/configs/rl/train_pointnav.yaml (`discrete_actions`, `modality`/`modalities`):
 #   - removes the default discrete actions (stop/move_forward/turn_left/turn_right) so the action space
 #     is purely continuous velocity_control;

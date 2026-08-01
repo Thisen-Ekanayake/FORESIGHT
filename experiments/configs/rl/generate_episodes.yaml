@@ -1,4 +1,4 @@
-# Script config for scripts/generate_pointnav_episodes.py — plain YAML (PyYAML), NOT a Hydra config.
+# Script config for tools/generate_pointnav_episodes.py — plain YAML (PyYAML), NOT a Hydra config.
 # Holds every value the script would otherwise hardcode. Override from the CLI with
 #   --set splits.train.num_episodes_per_scene=300 --set splits.val.num_episodes_per_scene=30
 

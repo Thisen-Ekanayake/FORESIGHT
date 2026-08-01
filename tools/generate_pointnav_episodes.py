@@ -9,7 +9,7 @@ acceptable for a working agent + reusable pipeline; expand with the HM3D train s
 Every value lives in experiments/configs/rl/generate_episodes.yaml — override with `--set KEY=VALUE`.
 
 Usage:
-  DISPLAY=:1 <habitat-python> scripts/generate_pointnav_episodes.py \
+  DISPLAY=:1 <habitat-python> tools/generate_pointnav_episodes.py \
       --set splits.train.num_episodes_per_scene=300 --set splits.val.num_episodes_per_scene=30
 """
 import argparse

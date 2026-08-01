@@ -1,4 +1,4 @@
-# Script config for scripts/train_pointnav.py — plain YAML (PyYAML), NOT a Hydra config.
+# Script config for tools/train_pointnav.py — plain YAML (PyYAML), NOT a Hydra config.
 # Holds every value the script would otherwise hardcode; the task/PPO hyperparameters live in the Hydra
 # config named below (pointnav_continuous.yaml). Override any key from the CLI with
 #   --set modality=depth --set eval=true

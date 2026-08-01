@@ -1,6 +1,6 @@
 # `src/foresight/sim/sensors.py`
 
-RGB + ground-truth depth + semantic sensor capture from a single Habitat-Sim agent pose. Library code — no file I/O, no CLI; consumed by [`scripts/capture_sensors.py`](../../../scripts/capture_sensors.md).
+RGB + ground-truth depth + semantic sensor capture from a single Habitat-Sim agent pose. Library code — no file I/O, no CLI; consumed by [`tools/capture_sensors.py`](../../../tools/capture_sensors.md).
 
 ## `Observation`
 

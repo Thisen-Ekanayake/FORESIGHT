@@ -12,7 +12,7 @@ dependencies:
       - torchvision==0.20.1
       - transformers==4.57.6
       - huggingface_hub==0.36.2
-      # RL: continuous-control PointGoal navigation (scripts/train_pointnav.py). habitat-lab pulls
+      # RL: continuous-control PointGoal navigation (tools/train_pointnav.py). habitat-lab pulls
       # gym==0.23.0 + hydra-core + omegaconf. Keep pillow at habitat-sim's pin (installing habitat-lab
       # otherwise bumps it to 11.x, which habitat-sim 0.3.3 rejects).
       - habitat-lab==0.3.320260507

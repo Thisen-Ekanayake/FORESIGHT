@@ -11,7 +11,7 @@ where progress = -(new_geodesic_dist - prev_geodesic_dist), and the velocity ter
 abrupt velocity changes (jerk) -> smooth trajectories.
 
 Importing this module registers both the measure (runtime registry) and its Hydra structured config,
-so `scripts/train_pointnav.py` / `record_pointnav_demo.py` import it before composing the config.
+so `tools/train_pointnav.py` / `record_pointnav_demo.py` import it before composing the config.
 """
 from dataclasses import dataclass
 from typing import Any, Optional, Tuple

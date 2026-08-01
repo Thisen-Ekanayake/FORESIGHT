@@ -12,12 +12,12 @@ Every value lives in YAML, not here: script settings in experiments/configs/rl/t
 
 Examples:
   # smoke test (few steps, verifies the pipeline runs)
-  DISPLAY=:1 <py> scripts/train_pointnav.py --habitat-set habitat_baselines.total_num_steps=2000 \
+  DISPLAY=:1 <py> tools/train_pointnav.py --habitat-set habitat_baselines.total_num_steps=2000 \
       habitat_baselines.num_environments=2 habitat_baselines.log_interval=1
   # full training
-  DISPLAY=:1 <py> scripts/train_pointnav.py
+  DISPLAY=:1 <py> tools/train_pointnav.py
   # evaluate a checkpoint on the val split
-  DISPLAY=:1 <py> scripts/train_pointnav.py --eval \
+  DISPLAY=:1 <py> tools/train_pointnav.py --eval \
       --habitat-set habitat_baselines.eval_ckpt_path_dir=results/runs/pointnav/checkpoints/latest.pth
 """
 import argparse

@@ -8,7 +8,7 @@ Motion is smoothed the same way as demo_1: keyframe poses are interpolated (lerp
 
 Every value lives in experiments/configs/rl/record_demo.yaml — override with `--set KEY=VALUE`.
 
-  DISPLAY=:1 <py> scripts/record_pointnav_demo.py --ckpt results/runs/pointnav/checkpoints/latest.pth \
+  DISPLAY=:1 <py> tools/record_pointnav_demo.py --ckpt results/runs/pointnav/checkpoints/latest.pth \
       --set episode_index=0 --set render.duration=15 --set render.fps=50
 """
 import argparse

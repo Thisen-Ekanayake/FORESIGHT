@@ -1,4 +1,4 @@
-# Script config for scripts/record_pointnav_demo.py — plain YAML (PyYAML), NOT a Hydra config.
+# Script config for tools/record_pointnav_demo.py — plain YAML (PyYAML), NOT a Hydra config.
 # Holds every value the script would otherwise hardcode. Override from the CLI with
 #   --set render.duration=15 --set render.fps=50 --set episode_index=3
 
