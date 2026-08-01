@@ -13,18 +13,24 @@ class Observation:
 
 
 def make_sim_config(
-    dataset_config: str, scene_id: str, width: int, height: int
+    dataset_config: str, scene_id: str, width: int, height: int, sensor_uuids=None
 ) -> habitat_sim.Configuration:
     sim_cfg = habitat_sim.SimulatorConfiguration()
     sim_cfg.scene_dataset_config_file = dataset_config
     sim_cfg.scene_id = scene_id
 
-    sensor_specs = []
-    for uuid, sensor_type in [
+    all_sensors = [
         ("rgb", habitat_sim.SensorType.COLOR),
         ("depth", habitat_sim.SensorType.DEPTH),
         ("semantic", habitat_sim.SensorType.SEMANTIC),
-    ]:
+    ]
+    # Default: all three (sensor-capture use). Pass sensor_uuids=("rgb",) to skip the
+    # depth/semantic passes when only RGB is needed (e.g. the demo renderer), which is faster.
+    if sensor_uuids is not None:
+        all_sensors = [s for s in all_sensors if s[0] in set(sensor_uuids)]
+
+    sensor_specs = []
+    for uuid, sensor_type in all_sensors:
         spec = habitat_sim.CameraSensorSpec()
         spec.uuid = uuid
         spec.sensor_type = sensor_type
