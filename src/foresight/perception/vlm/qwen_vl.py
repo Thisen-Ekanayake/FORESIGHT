@@ -1,6 +1,8 @@
 """Compact VLM scene reasoning via Qwen3-VL-2B-Instruct (zero-shot, no fine-tuning)."""
 from __future__ import annotations
 
+import re
+
 import numpy as np
 import torch
 from PIL import Image
@@ -14,6 +16,21 @@ DEFAULT_SYSTEM_PROMPT = (
     "reflective or textureless surfaces (glass, mirrors, blank walls) that could fool a "
     "depth estimator. Be concise and grounded only in what is visible."
 )
+
+HEADING_SYSTEM_PROMPT = (
+    "You are the heading-proposal module of a monocular robot navigator, used at low "
+    "frequency (roughly once every 0.5-2 seconds) to redirect a fast reactive controller "
+    "that handles per-frame obstacle avoidance on its own. Propose a direction of travel "
+    "toward open, traversable free space, steering away from clutter, glass, and mirrors."
+)
+
+HEADING_PROMPT = (
+    "Respond with EXACTLY one line, nothing else: a heading in degrees relative to "
+    "straight ahead, from -90 (hard left) to 90 (hard right), 0 = straight ahead. "
+    "If the way ahead is entirely blocked, respond with the single word STOP instead."
+)
+
+_HEADING_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
 
 
 class Qwen3VLSceneReasoner:
@@ -71,3 +88,25 @@ class Qwen3VLSceneReasoner:
         return self.processor.batch_decode(
             new_tokens, skip_special_tokens=True, clean_up_tokenization_spaces=True
         )[0].strip()
+
+    def propose_heading(self, rgb: np.ndarray, max_new_tokens: int = 16) -> float | None:
+        """Low-frequency heading proposal for `foresight.planning.fusion.ActionFusionController`.
+
+        Returns a heading in radians relative to straight-ahead (positive = right), or None if
+        the model reports the way is blocked, or its output doesn't parse as a heading — in
+        either case the controller falls back to the goal bearing for this cycle.
+        """
+        text = self.describe(
+            rgb,
+            prompt=HEADING_PROMPT,
+            system_prompt=HEADING_SYSTEM_PROMPT,
+            max_new_tokens=max_new_tokens,
+            repetition_penalty=1.0,
+        )
+        if "stop" in text.lower():
+            return None
+        match = _HEADING_NUMBER_RE.search(text)
+        if match is None:
+            return None
+        degrees = max(-90.0, min(90.0, float(match.group())))
+        return float(np.deg2rad(degrees))
