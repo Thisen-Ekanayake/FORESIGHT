@@ -1,9 +1,8 @@
 # FORESIGHT
 
-![Last commit](https://img.shields.io/github/last-commit/Thisen-Ekanayake/FORESIGHT)
 ![Python](https://img.shields.io/badge/python-3.9-blue)
 ![Simulator](https://img.shields.io/badge/simulator-Habitat--Sim-orange)
-![Status](https://img.shields.io/badge/status-research-lightgrey)
+![Status](https://img.shields.io/badge/status-research-green)
 
 Map-Free Monocular Navigation with an On-Board VLM. RGB-only indoor navigation in Habitat-Sim: zero-shot monocular depth + a compact VLM, fused by a fast-slow controller with a reactive safety layer, benchmarked against a depth-only heuristic baseline. Full spec: `Project_FORESIGHT.pdf`.
 
