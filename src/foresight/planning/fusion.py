@@ -22,6 +22,26 @@ def wrap_pi(angle: float) -> float:
     return float((angle + np.pi) % (2 * np.pi) - np.pi)
 
 
+def heading_to_velocity(
+    heading_rad: float,
+    max_linear_mps: float,
+    max_angular_radps: float,
+    heading_gain: float,
+) -> tuple[float, float]:
+    """Proportional heading controller shared by every planner in this package (VLM fusion,
+    depth-only heuristic): a desired heading (rad, relative to straight-ahead) becomes an
+    angular velocity via a P-gain, and linear speed is throttled down for sharp turns so the
+    agent doesn't clip corners while rotating in place. Shared rather than duplicated so the
+    VLM-vs-depth-only ablation (Project_FORESIGHT deliverable B) isolates only the heading
+    source, not incidental differences in how a heading turns into motion.
+    """
+    heading_error = wrap_pi(heading_rad)
+    angular_velocity = float(np.clip(heading_gain * heading_error, -max_angular_radps, max_angular_radps))
+    turn_frac = min(1.0, abs(heading_error) / (np.pi / 2))
+    linear_velocity = max_linear_mps * (1.0 - turn_frac)
+    return linear_velocity, angular_velocity
+
+
 @dataclass
 class FusionResult:
     linear_velocity: float
@@ -94,14 +114,9 @@ class ActionFusionController:
                 )
             )
 
-        heading_error = wrap_pi(fused_heading)
-        angular_velocity = float(
-            np.clip(self.heading_gain * heading_error, -self.max_angular_radps, self.max_angular_radps)
+        linear_velocity, angular_velocity = heading_to_velocity(
+            fused_heading, self.max_linear_mps, self.max_angular_radps, self.heading_gain
         )
-        # Slow down for sharp turns so the agent doesn't clip corners while rotating in place.
-        turn_frac = min(1.0, abs(heading_error) / (np.pi / 2))
-        linear_velocity = self.max_linear_mps * (1.0 - turn_frac)
-
         safety = self.safety.apply(depth, linear_velocity, angular_velocity)
 
         return FusionResult(
