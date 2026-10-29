@@ -43,7 +43,10 @@ class ReactiveSafetyLayer:
         turn_radps: float = np.deg2rad(20.0),
         row_frac: tuple[float, float] = (0.4, 0.9),
         col_frac: tuple[float, float] = (0.25, 0.75),
+        clearance_quantile: float = 0.0,
     ):
+        """clearance_quantile: 0 takes the single closest cone pixel; e.g. 0.02 ignores the closest 2%
+        (stray pixels of a door frame at the cone's edge), for callers that already plan around obstacles."""
         if stop_distance_m >= slow_distance_m:
             raise ValueError("stop_distance_m must be < slow_distance_m")
         self.stop_distance_m = stop_distance_m
@@ -51,6 +54,7 @@ class ReactiveSafetyLayer:
         self.turn_radps = turn_radps
         self.row_frac = row_frac
         self.col_frac = col_frac
+        self.clearance_quantile = clearance_quantile
 
     def _cone(self, depth: np.ndarray) -> np.ndarray:
         h, w = depth.shape
@@ -61,7 +65,7 @@ class ReactiveSafetyLayer:
     def apply(self, depth: np.ndarray, linear_velocity: float, angular_velocity: float) -> SafetyResult:
         cone = self._cone(depth)
         valid = cone[np.isfinite(cone) & (cone > 0)]
-        min_clearance = float(valid.min()) if valid.size else float("inf")
+        min_clearance = float(np.quantile(valid, self.clearance_quantile)) if valid.size else float("inf")
 
         if min_clearance < self.stop_distance_m:
             w = depth.shape[1]

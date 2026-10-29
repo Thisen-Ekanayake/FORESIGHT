@@ -30,6 +30,16 @@ HEADING_PROMPT = (
     "If the way ahead is entirely blocked, respond with the single word STOP instead."
 )
 
+# Generic (scene-agnostic) nudge to check for reflections before describing. With the plain describe prompt,
+# Qwen3-VL-2B narrated a hallway mirror in 00808 as "an open doorway into another hallway" on most frames;
+# asking it to rule reflections in/out first surfaced the mirror on 4/4 approach frames (1/6 false alarm on
+# mirror-free controls) — results/runs/mirror_trap/test_reflection_prompt.py, a 10-frame sanity check only.
+REFLECTION_AWARE_PROMPT = (
+    "First, in one sentence, say whether any open space, doorway or room in view could actually be a reflection in a "
+    "mirror or glass, and what visual evidence supports that. Then describe this scene for a robot deciding where it is "
+    "safe to move next."
+)
+
 _HEADING_NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
 
 

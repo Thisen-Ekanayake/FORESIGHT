@@ -12,10 +12,11 @@ traces back to the heading source, not to incidental differences in how the epis
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, Optional
 
 import habitat_sim
 import numpy as np
+from habitat_sim.utils.common import quat_from_angle_axis
 
 from foresight.perception.depth.depth_anything import ZeroShotDepthEstimator
 from foresight.sim.navigate import _sample_start_goal
@@ -59,18 +60,37 @@ def run_closed_loop_episode(
     time_step: float = 1.0,
     meters_per_pixel: float = 0.05,
     max_sample_tries: int = 200,
+    start_position: Optional[np.ndarray] = None,
+    start_yaw_rad: float = 0.0,
+    goal_position: Optional[np.ndarray] = None,
 ) -> ClosedLoopEpisode:
+    """start_position/goal_position: pin a hand-picked episode (e.g. a staged mirror encounter)
+    instead of sampling one from `seed`; both must be given together. start_yaw_rad rotates the
+    agent about +Y (0 = facing -Z, habitat_sim's default forward)."""
+    if (start_position is None) != (goal_position is None):
+        raise ValueError("start_position and goal_position must be given together")
     cfg = make_sim_config(dataset_config, scene_id, width, height, sensor_uuids=("rgb",))
     sim = habitat_sim.Simulator(cfg)
     try:
         sim.pathfinder.seed(seed)
         agent = sim.get_agent(0)
 
-        start, goal, planned_path, geo_dist = _sample_start_goal(
-            sim.pathfinder, min_path_dist, max_sample_tries
-        )
+        if start_position is None:
+            start, goal, planned_path, geo_dist = _sample_start_goal(
+                sim.pathfinder, min_path_dist, max_sample_tries
+            )
+        else:
+            start = np.asarray(sim.pathfinder.snap_point(start_position), np.float32)
+            goal = np.asarray(sim.pathfinder.snap_point(goal_position), np.float32)
+            path = habitat_sim.ShortestPath()
+            path.requested_start, path.requested_end = start, goal
+            if not (sim.pathfinder.find_path(path) and np.isfinite(path.geodesic_distance)):
+                raise RuntimeError(f"no navmesh path from {start} to {goal}")
+            planned_path = np.asarray(path.points, np.float32)
+            geo_dist = float(path.geodesic_distance)
         state = habitat_sim.AgentState()
         state.position = start
+        state.rotation = quat_from_angle_axis(start_yaw_rad, np.array([0.0, 1.0, 0.0]))
         agent.set_state(state)
 
         rgb_frames, positions, step_log = [], [np.asarray(start, np.float32)], []
