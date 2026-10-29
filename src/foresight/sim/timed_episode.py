@@ -66,6 +66,7 @@ def run_timed_episode(
     stop_radius_m: Optional[float] = None,
     stop_on_contact_m: Optional[float] = None,
     keep_frames: bool = True,
+    oracle_semantic: bool = False,
 ) -> TimedEpisode:
     """width/height: sensor resolution (what the stored frames are, e.g. for a video). model_size:
     optional (w, h) the frame is resized to before the depth model and `decide` see it, so a
@@ -74,8 +75,10 @@ def run_timed_episode(
     it (as a crash) once the sim-GT depth straight ahead drops below this while the agent is driving forward
     (turning in place next to a wall is not a crash) — the same rule for every agent. keep_frames=False
     drops the per-tick RGB frames (a 90 s run at 1024x1024 is ~2.8 GB) when the poses are enough, e.g. to
-    re-render the views for a video."""
-    sim = habitat_sim.Simulator(make_sim_config(dataset_config, scene_id, width, height, sensor_uuids=("rgb", "depth")))
+    re-render the views for a video. oracle_semantic: test harnesses only — adds the sim's instance-id image as
+    pose["oracle_semantic"] (and the simulator as pose["oracle_sim"]) so a scripted stand-in can replace a model."""
+    uuids = ("rgb", "depth", "semantic") if oracle_semantic else ("rgb", "depth")
+    sim = habitat_sim.Simulator(make_sim_config(dataset_config, scene_id, width, height, sensor_uuids=uuids))
     try:
         agent = sim.get_agent(0)
         start = np.asarray(sim.pathfinder.snap_point(start_position), np.float32)
@@ -106,6 +109,8 @@ def run_timed_episode(
             depth = depth_estimator.estimate(model_rgb)  # returns a CPU array, so this is GPU-synchronised
             depth_ms = (time.perf_counter() - t0) * 1000
             pose = {"position": np.asarray(agent_state.position, float), "forward_xz": [float(fwd[0]), float(fwd[2])]}
+            if oracle_semantic:
+                pose["oracle_semantic"], pose["oracle_sim"] = obs["semantic"], sim
             linear, angular, diagnostics = decide(model_rgb, depth, bearing, t, pose)
             wall_ms = (time.perf_counter() - t0) * 1000
             tick_ms = wall_ms - diagnostics.get("background_ms", 0.0)
@@ -121,6 +126,8 @@ def run_timed_episode(
                           "goal_bearing_rad": bearing, "forward_xz": [float(fwd[0]), float(fwd[2])], "gt_depth_ahead_m": gt_ahead, "linear_velocity": linear,
                           "angular_velocity": angular, "collided": hit, **diagnostics})
             t += dt
+            if diagnostics.get("episode_done"):  # the agent declared its task finished (or gave up)
+                break
             if stop_on_contact_m is not None and gt_ahead < stop_on_contact_m and linear > 0.02:
                 contact = t
                 break

@@ -44,8 +44,10 @@ class BackgroundDescriber:
     inside `poll`, which returns those milliseconds so the episode loop can exclude them from the tick.
     """
 
-    def __init__(self, describe: Callable[[np.ndarray], str]):
+    def __init__(self, describe: Callable[[np.ndarray], str], min_latency_s: float = 0.0):
+        """min_latency_s: deliver no sooner than this (for scripted stand-ins that compute instantly)."""
         self._describe = describe
+        self.min_latency_s = min_latency_s
         self._job: Optional[_Job] = None
         self.latest: Optional[str] = None
         self.latest_available_at: Optional[float] = None
@@ -55,19 +57,22 @@ class BackgroundDescriber:
 
     def poll(self, rgb: np.ndarray, t: float) -> float:
         if self._job is not None and t >= self._job.ready_at:
-            self.latest = self._job.text
-            self.latest_available_at = self._job.ready_at
-            self.latest_seen_at = self._job.started_at
+            self._deliver(self._job)
             self._job = None
         if self._job is None:
             t0 = time.perf_counter()
             text = self._describe(rgb)
-            latency = time.perf_counter() - t0
+            latency = max(time.perf_counter() - t0, self.min_latency_s)
             self.latencies_s.append(latency)
             self._job = _Job(text, t, t + latency)
             self.jobs.append((t, t + latency))
             return latency * 1000
         return 0.0
+
+    def _deliver(self, job: _Job) -> None:
+        self.latest = job.text
+        self.latest_available_at = job.ready_at
+        self.latest_seen_at = job.started_at
 
     def progress(self, t: float) -> float:
         """Fraction (0-1) of the in-flight description done at sim time t."""
@@ -84,21 +89,48 @@ class ForesightNavigator:
     A 2B VLM also "sees" reflections in glossy artwork and screens, so one flag is not acted on alone: on a
     new note with P(hazard) > threshold the robot stops, turns back to face the view that note was about,
     and waits for the VLM's next look at it. If Laya flags that note too, the navigator draws a wall across
-    the view (only if it shows a too-deep gap, see `MapNavigator.add_reflection_wall`) and replans;
+    the view (only if it, or the first flagged view, shows a too-deep gap, see `MapNavigator.add_reflection_wall`)
+    and replans;
     otherwise the flag is dismissed. Gives up after `verify_timeout_s`. A flag on a view whose centre already
     runs into a reflection wall is old news and is not re-checked."""
 
     def __init__(self, laya: LayaClient, describer: BackgroundDescriber, navigator: MapNavigator,
                  questions: dict = MIRROR_QUESTIONS, hazard_question: str = "mirror", hazard_option: str = "A",
-                 threshold: float = 0.6, banner_s: float = 3.0, align_deg: float = 8.0, verify_timeout_s: float = 8.0):
+                 threshold: float = 0.6, banner_s: float = 3.0, align_deg: float = 8.0, verify_timeout_s: float = 8.0,
+                 in_path_only: bool = False):
+        """in_path_only: only double-check a flagged view if the robot's current route runs into it (within
+        `path_m` ahead and `path_deg` of the view's centre); flags about views off the route are logged as
+        "off_path" and cost nothing — a reflection matters only where the robot is about to drive."""
         self.laya, self.describer, self.nav, self.questions = laya, describer, navigator, questions
         self.hazard_question, self.hazard_option = hazard_question, hazard_option
         self.threshold, self.banner_s = threshold, banner_s
         self.align_cos, self.verify_timeout_s = np.cos(np.deg2rad(align_deg)), verify_timeout_s
+        self.in_path_only = in_path_only
         self._handled: set = set()
+        self._resolved: list = []  # (pos, fwd) of views whose check ended without a new wall: don't re-check them
         self._verify: Optional[dict] = None
         self._wall_at = -np.inf
         self.events: list = []  # (t, kind, note seen_at, p): flag / confirmed / dismissed / timeout / known
+
+    def _route_into(self, seen, path_m: float = 4.0, path_deg: float = 25.0) -> bool:
+        pos, fwd = self.nav.scans[seen][:2]
+        f = np.asarray(fwd, float) / np.linalg.norm(fwd)
+        for p in self.nav.last_path:
+            v = np.asarray(p, float) - pos
+            d = float(np.linalg.norm(v))
+            if 0.3 < d < path_m and v @ f > d * np.cos(np.deg2rad(path_deg)):
+                return True
+        return False
+
+    def _was_resolved(self, seen, near_m: float = 1.0, within_deg: float = 30.0) -> bool:
+        if seen not in self.nav.scans:
+            return False
+        pos, fwd = self.nav.scans[seen][:2]
+        for p, f in self._resolved:
+            cos = f @ fwd / (np.linalg.norm(f) * np.linalg.norm(fwd) + 1e-9)
+            if np.linalg.norm(p - pos) < near_m and cos > np.cos(np.deg2rad(within_deg)):
+                return True
+        return False
 
     def step(self, rgb: np.ndarray, depth: np.ndarray, goal_bearing_rad: float, t: float, pose: dict):
         background_ms = self.describer.poll(rgb, t)
@@ -119,19 +151,25 @@ class ForesightNavigator:
         event, wall_added = None, False
         v = self._verify
         if v is None:
-            if new_note and flagged and self.nav.view_walled(seen):
-                event = "known"  # that reflection is already walled off; nothing to check
+            if new_note and flagged and (self.nav.view_walled(seen) or self._was_resolved(seen)):
+                event = "known"  # already walled off, or already checked from about here: nothing new to check
+            elif new_note and flagged and seen in self.nav.scans and self.in_path_only and not self._route_into(seen):
+                event = "off_path"
             elif new_note and flagged and seen in self.nav.scans:
                 self._verify = {"seen": seen, "fwd": self.nav.scans[seen][1], "since": t, "aligned_at": None}
                 event = "flag"
         elif new_note and v["aligned_at"] is not None and seen >= v["aligned_at"]:  # the second look
             if flagged:
-                wall_added = self.nav.add_reflection_wall(seen)
+                # The confirming view can be too close to show a gap (a mirror filling the whole view reads deep
+                # everywhere); the first flagged view of the same reflection, from further back, then decides.
+                wall_added = self.nav.add_reflection_wall(seen) or self.nav.add_reflection_wall(v["seen"])
                 if wall_added:
                     self._wall_at = t
                 event = "confirmed"
             else:
                 event = "dismissed"
+            if not wall_added and seen in self.nav.scans:
+                self._resolved.append(self.nav.scans[seen][:2])
             self._verify = None
         elif t - v["since"] > self.verify_timeout_s:
             event, self._verify = "timeout", None

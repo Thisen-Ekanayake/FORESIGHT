@@ -20,17 +20,20 @@ class MapNavigator:
                  max_angular_radps: float = np.deg2rad(40.0), heading_gain: float = 1.5,
                  look_around_s: float = 8.0, safety: Optional[ReactiveSafetyLayer] = None,
                  max_linear_accel: float = 0.4, max_linear_decel: float = 1.5,
-                 max_angular_accel: float = np.deg2rad(120.0)):
+                 max_angular_accel: float = np.deg2rad(120.0), replan_look: bool = True, plan_kw: Optional[dict] = None):
         """look_around_s: spin in place (~360 deg at max_angular_radps) to seed the map, the usual start of an
         exploration run; both conditions do it. The same look is repeated when the route suddenly reverses
         (a new obstacle closed the way it was heading: look before committing to a long detour) or the robot
-        has stopped making progress. The accel limits ramp commands the way a real
-        base would (braking is allowed to be sharper than speeding up)."""
+        has stopped making progress (replan_look=False keeps only the stuck trigger, for an explorer whose goal
+        legitimately jumps between frontiers). The accel limits ramp commands the way a real
+        base would (braking is allowed to be sharper than speeding up). plan_kw: overrides for `local_map.plan`."""
         self.goal = np.asarray(goal_xz, float)
         self.map = OccupancyMap(np.asarray(map_center_xz, float), size_m=map_size_m)
         self.scale = FloorScale()
         self.max_linear_mps, self.max_angular_radps, self.heading_gain = max_linear_mps, max_angular_radps, heading_gain
-        self.look_around_s = look_around_s
+        self.look_around_s, self.replan_look = look_around_s, replan_look
+        self.plan_kw = dict(plan_kw or {})
+        self.last_path: list = []  # the route planned on the latest tick (world xz points)
         # The planner already routes around mapped obstacles, so this is a last-resort guard: tighter
         # margins than the reactive-only controllers use, and robust to stray door-frame pixels.
         self.safety = safety or ReactiveSafetyLayer(stop_distance_m=0.3, slow_distance_m=0.7, clearance_quantile=0.02)
@@ -52,7 +55,8 @@ class MapNavigator:
         fwd = np.asarray(pose["forward_xz"], float)
         self.map.integrate(pos, fwd, bearings, ranges)
         self.scans[t] = (pos, fwd, bearings, ranges)
-        pl = plan(self.map, pos, self.goal)
+        pl = plan(self.map, pos, self.goal, **self.plan_kw)
+        self.last_path = pl.path_xz
         right = np.array([-fwd[1], fwd[0]])
         looking = False
         if face_xz is not None:
@@ -99,7 +103,8 @@ class MapNavigator:
         d = None if not ahead else (ahead[0] - pos) / np.linalg.norm(ahead[0] - pos)
         reason = None
         fresh = all(np.linalg.norm(pos - q) > spot_m for q in self._look_spots)
-        if d is not None and self._prev_dir is not None and d @ self._prev_dir < np.cos(np.deg2rad(flip_deg)) and fresh:
+        if (self.replan_look and d is not None and self._prev_dir is not None
+                and d @ self._prev_dir < np.cos(np.deg2rad(flip_deg)) and fresh):
             reason = "replan"
         elif (t - self._look[1] > stuck_s and self._trail[0][0] <= t - stuck_s + 0.2
               and np.linalg.norm(pos - self._trail[0][1]) < stuck_m):

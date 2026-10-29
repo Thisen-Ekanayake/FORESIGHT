@@ -28,6 +28,9 @@ def make_sim_config(
     # depth/semantic passes when only RGB is needed (e.g. the demo renderer), which is faster.
     if sensor_uuids is not None:
         all_sensors = [s for s in all_sensors if s[0] in set(sensor_uuids)]
+    # The semantic mesh costs ~0.6 GB of GPU memory in HM3D 00808; skip it unless a semantic sensor needs it
+    # (`sim.semantic_scene` still lists the objects, but their OBBs are computed from that mesh: all zero without it).
+    sim_cfg.load_semantic_mesh = any(uuid == "semantic" for uuid, _ in all_sensors)
 
     sensor_specs = []
     for uuid, sensor_type in all_sensors:
