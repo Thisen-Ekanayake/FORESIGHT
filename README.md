@@ -35,6 +35,7 @@ Each writes a first-person + top-down `.mp4` and a `metrics.json` under `results
 | Action fusion controller (VLM @0.5-2Hz + reactive safety @10-30Hz) | ✅ | [`docs/src/foresight/planning/fusion.md`](docs/src/foresight/planning/fusion.md) |
 | Depth-only heuristic baseline (ablation control) | ✅ | [`docs/src/foresight/planning/depth_heuristic.md`](docs/src/foresight/planning/depth_heuristic.md) |
 | Trained PPO PointGoal navigator (extra baseline) | 🔵 | [`docs/rl/pointnav.md`](docs/rl/pointnav.md) |
+| Language-goal object search ("find the sofa, then the bed") + fixed 16-episode evaluation | 🔵 | [`docs/src/foresight/planning/object_search.md`](docs/src/foresight/planning/object_search.md), [`docs/tools/run_object_search.md`](docs/tools/run_object_search.md) |
 | Difficulty-stratified benchmark (glass/mirror/low-light/blur) | ⬜ | — |
 
 ## Structure

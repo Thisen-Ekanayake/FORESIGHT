@@ -30,7 +30,7 @@ PANEL_Y = 200
 STRIP_Y, STRIP_H = PANEL_Y + PW + 14, 96
 BOT_Y = STRIP_Y + STRIP_H + 14
 BOT_H = S - G - BOT_Y
-MAP = BOT_H
+MAP_W, MAP_H = PW, BOT_H  # map panel: the square cutaway (side MAP_W) cropped to the middle rows
 INSET = 330
 YELLOW = (255, 214, 64)
 LABEL_COLORS = {"sofa": (255, 140, 200), "bed": (140, 200, 255), "tv": (200, 170, 255), "refrigerator": (150, 240, 220),
@@ -67,6 +67,36 @@ class Run:
     def step(self, t):
         return self.ep.steps[_tick(self.ep, t)]
 
+    def mirror_encounter(self, mirror_xz, near_m: float = 1.5, within_s: float = 60.0):
+        """-> (sim time, true distance ahead) of the closest approach while within `near_m` of the mirror, or None."""
+        if mirror_xz is None:
+            return None
+        a, b = (np.asarray(p, float) for p in mirror_xz)
+        best = None
+        for i, x in enumerate(self.ep.steps):
+            if x["t"] > within_s:
+                break
+            p = np.asarray(self.ep.positions[i], float)[[0, 2]]
+            u = np.clip((p - a) @ (b - a) / ((b - a) @ (b - a)), 0, 1)
+            if np.linalg.norm(a + u * (b - a) - p) < near_m and (best is None or x["gt_depth_ahead_m"] < best[1]):
+                best = (x["t"], x["gt_depth_ahead_m"])
+        return best
+
+    def behind_mirror(self, mirror_xz, start_xz):
+        """Remembered objects on the far side of the mirror line from the start (seen in the reflection)."""
+        if mirror_xz is None:
+            return []
+        a, b = (np.asarray(p, float) for p in mirror_xz)
+        n = np.array([-(b - a)[1], (b - a)[0]])
+        side0 = np.sign((np.asarray(start_xz) - a) @ n)
+        out = []
+        for o in self.ep.steps[-1].get("memory", []):
+            q = np.asarray(o["xz"], float)
+            u = (q - a) @ (b - a) / ((b - a) @ (b - a))
+            if np.sign((q - a) @ n) != side0 and -0.5 < u < 1.5 and abs((q - a) @ n) / np.linalg.norm(n) < 2.0:
+                out.append(o)
+        return out
+
     def map_step(self, t):
         k = max(0, int(np.searchsorted(self.map_t, t, side="right")) - 1)
         x = self.ep.steps[self.map_idx[k]]
@@ -99,16 +129,17 @@ class Scene:
         self.photo = np.asarray(Image.open(root / "topdown.png").convert("RGB"))
         self._cache = {}
 
-    def to_px(self, x, z, size):
+    def to_px(self, x, z, size, crop_h=None):
         c, k = self.meta["center"], size / self.meta["width_m"]
-        return size / 2 + (x - c[0]) * k, size / 2 + (z - c[2]) * k
+        dy = 0 if crop_h is None else (size - crop_h) / 2
+        return size / 2 + (x - c[0]) * k, size / 2 + (z - c[2]) * k - dy
 
     def base(self, size):
         if size not in self._cache:
             self._cache[size] = np.asarray(Image.fromarray(self.photo).resize((size, size), Image.LANCZOS)).astype(np.float32)
         return self._cache[size]
 
-    def revealed(self, run: Run, t, size, start_xz):
+    def revealed(self, run: Run, t, size, start_xz, crop_h=None):
         """The cutaway lit only where this robot's own map has evidence (explored); the rest dimmed."""
         m = run.map_step(t)
         score = m["map_score"].astype(np.float32) / 30.0
@@ -126,6 +157,9 @@ class Scene:
         mask = np.asarray(Image.fromarray((mask * 255).astype(np.uint8)).filter(_blur()), np.float32)[..., None] / 255
         base = self.base(size)
         out = base * (0.22 + 0.78 * mask)
+        if crop_h is not None:
+            y0 = (size - crop_h) // 2
+            out = out[y0:y0 + crop_h]
         return Image.fromarray(out.astype(np.uint8)).convert("RGBA")
 
 
@@ -149,37 +183,40 @@ def _pin(d, x, y, label, solid, faded=False):
     d.text((x + 16, y - 16), _name(label), font=_font("Bold", 24), fill=color, stroke_width=3, stroke_fill=(10, 12, 16))
 
 
-def _map(img, scene: Scene, run: Run, t, xy, size, color, start_xz, mirror_xz=None, foresight=False):
-    canvas = scene.revealed(run, t, size, start_xz)
+def _map(img, scene: Scene, run: Run, t, xy, color, start_xz, mirror_xz=None):
+    size, ch = MAP_W, MAP_H
+    canvas = scene.revealed(run, t, size, start_xz, crop_h=ch)
     d = ImageDraw.Draw(canvas)
+    px = lambda x, z: scene.to_px(x, z, size, ch)
     st = run.step(t)
     ms = run.map_step(t)
     if mirror_xz is not None:
         a, b = mirror_xz
-        d.line([scene.to_px(*a, size), scene.to_px(*b, size)], fill=CYAN, width=7)
-        mx, my = scene.to_px(*b, size)
-        d.text((mx + 8, my - 30), "mirror", font=_font("Black", 24), fill=CYAN, stroke_width=3, stroke_fill=(10, 12, 16))
+        d.line([px(*a), px(*b)], fill=CYAN, width=7)
+        mx, my = px(*a)
+        d.text((mx + 10, my - 6), "mirror", font=_font("Black", 24), fill=CYAN, stroke_width=3, stroke_fill=(10, 12, 16))
     for a, b in st.get("map_walls", []):
-        _dashed(d, scene.to_px(*a, size), scene.to_px(*b, size), AMBER, 7)
-    route = [scene.to_px(p[0], p[1], size) for p in st.get("plan_path", [])]
+        _dashed(d, px(*a), px(*b), AMBER, 7)
+    route = [px(p[0], p[1]) for p in st.get("plan_path", [])]
     if len(route) > 1 and st.get("mode") not in ("done", "gave_up", "announce"):
         for a, b in zip(route[:-1:2], route[1::2]):
             d.line([a, b], fill=(255, 255, 255), width=3)
     if st.get("mode") == "explore" and st.get("frontier_xz"):
-        fx, fy = scene.to_px(*st["frontier_xz"], size)
+        fx, fy = px(*st["frontier_xz"])
         d.line([(fx - 12, fy - 12), (fx + 12, fy + 12)], fill=YELLOW, width=5)
         d.line([(fx - 12, fy + 12), (fx + 12, fy - 12)], fill=YELLOW, width=5)
+    summary = {}
     for o in ms.get("memory", []):
-        if o["raw_hits"] < 1:
-            continue
-        x, y = scene.to_px(*o["xz"], size)
-        if 0 <= x < size and 0 <= y < size:
-            confirmed = o["hits"] >= 3 and o["hits"] > o["misses"] and not o["rejected"]
-            ignored = o["rejected"] or (o["raw_hits"] > o["hits"] and o["hits"] < 3)  # e.g. seen through a mirror wall
+        confirmed = o["hits"] >= 3 and o["hits"] > o["misses"] and not o["rejected"]
+        ignored = o["rejected"] or (o["raw_hits"] > o["hits"] and o["hits"] < 3)  # e.g. seen through a mirror wall
+        sm = summary.setdefault(o["label"], [0, 0])
+        sm[0 if confirmed else 1] += 0 if ignored else 1
+        x, y = px(*o["xz"])
+        if 0 <= x < size and 0 <= y < ch:
             _pin(d, x, y, o["label"], confirmed, faded=ignored)
     k = int(np.searchsorted(run.track.t, t, side="right"))
     pos, yaw = run.track.at(t)
-    path = [scene.to_px(p[0], p[2], size) for p in run.track.pos[:k]] + [scene.to_px(pos[0], pos[2], size)]
+    path = [px(p[0], p[2]) for p in run.track.pos[:k]] + [px(pos[0], pos[2])]
     sx, sy = path[0]
     d.ellipse((sx - 10, sy - 10, sx + 10, sy + 10), outline=(255, 255, 255), width=4)
     if len(path) > 1:
@@ -191,8 +228,34 @@ def _map(img, scene: Scene, run: Run, t, xy, size, color, start_xz, mirror_xz=No
     d.polygon([tuple(tip), tuple(np.array([cx, cy]) + n * 14 - f * 10), tuple(np.array([cx, cy]) - n * 14 - f * 10)],
               fill=color, outline=(255, 255, 255))
     img.alpha_composite(canvas, xy)
-    _box(img, (xy[0] + 10, xy[1] + 10, xy[0] + 330, xy[1] + 52), (8, 10, 14, 205), radius=10)
-    ImageDraw.Draw(img).text((xy[0] + 22, xy[1] + 16), "Its own map (top-down)", font=_font("Bold", 24), fill=TEXT)
+    _box(img, (xy[0] + 10, xy[1] + 10, xy[0] + 400, xy[1] + 52), (8, 10, 14, 205), radius=10)
+    d = ImageDraw.Draw(img)
+    d.text((xy[0] + 22, xy[1] + 16), "Its own map, as it explores", font=_font("Bold", 24), fill=TEXT)
+    if summary:
+        parts = [(f"{_name(l)}: {c} sure" + (f", {m} maybe" if m else ""), LABEL_COLORS.get(l, TEXT)) for l, (c, m) in summary.items()]
+        w = sum(d.textlength(p, font=_font("Bold", 26)) for p, _ in parts) + 30 * len(parts) + 20
+        x0 = xy[0] + MAP_W - 10 - w
+        _box(img, (x0, xy[1] + 10, xy[0] + MAP_W - 10, xy[1] + 52), (8, 10, 14, 205), radius=10)
+        d = ImageDraw.Draw(img)
+        x = x0 + 18
+        for ptxt, col in parts:
+            d.text((x, xy[1] + 15), ptxt, font=_font("Bold", 26), fill=col)
+            x += d.textlength(ptxt, font=_font("Bold", 26)) + 30
+    _box(img, (xy[0] + 10, xy[1] + MAP_H - 50, xy[0] + MAP_W - 10, xy[1] + MAP_H - 10), (8, 10, 14, 205), radius=10)
+    d = ImageDraw.Draw(img)
+    lx, ly, f = xy[0] + 30, xy[1] + MAP_H - 30, _font("Medium", 22)
+    d.ellipse((lx - 9, ly - 9, lx + 9, ly + 9), fill=TEXT)
+    d.text((lx + 16, ly - 14), "seen 3+ times", font=f, fill=MUTED)
+    lx += 200
+    d.ellipse((lx - 9, ly - 9, lx + 9, ly + 9), outline=TEXT, width=3)
+    d.text((lx + 16, ly - 14), "maybe", font=f, fill=MUTED)
+    lx += 120
+    d.line([(lx - 9, ly - 9), (lx + 9, ly + 9)], fill=YELLOW, width=4)
+    d.line([(lx - 9, ly + 9), (lx + 9, ly - 9)], fill=YELLOW, width=4)
+    d.text((lx + 16, ly - 14), "next place to explore", font=f, fill=MUTED)
+    lx += 270
+    _dashed(d, (lx - 12, ly), (lx + 22, ly), AMBER, 5, dash=8, gap=5)
+    d.text((lx + 32, ly - 14), "wall it drew", font=f, fill=MUTED)
 
 
 def _inset(img, views, run: Run, t, x, y, labels):
@@ -226,35 +289,37 @@ def _first_person(img, views, run, t, x, labels):
     _inset(img, views, run, t, x + PW - INSET - 20, PANEL_Y + PW - INSET - 94, labels)
 
 
-def _status(run: Run, t, foresight):
+def _status(run: Run, t, foresight, near_miss=None):
     """-> (headline, colour) for the strip under a robot's camera, and an optional banner on the camera."""
     st = run.step(t)
     mode, lab = st.get("mode"), st.get("target_label")
     if run.crash is not None and t >= run.crash:
         return "Crashed", RED, ("DROVE INTO THE MIRROR", (205, 40, 50, 230))
+    if near_miss is not None and near_miss[0] - 1.5 <= t <= near_miss[0] + 3.0:
+        return "Safety layer caught the mirror frame", RED, (f"{near_miss[1]:.1f} m FROM THE MIRROR", (205, 40, 50, 230))
     if mode == "done":
-        return "Done: both objects found", GREEN, None
+        return "Done", GREEN, None
     if mode == "gave_up":
-        return "Gave up: nothing left to explore", MUTED, None
+        return "Gave up: nowhere left to explore", MUTED, None
     if foresight and st.get("verifying"):
-        return "Reflection? Holding for a second look", AMBER, ("MIRROR? DOUBLE-CHECKING", (196, 120, 0, 230))
+        return "Holding for a second look", AMBER, ("MIRROR? DOUBLE-CHECKING", (196, 120, 0, 230))
     if foresight and st.get("hazard"):
-        return "Mirror confirmed: walled off on its map", GREEN, ("MIRROR CONFIRMED: WALLED OFF", (16, 128, 84, 230))
+        return "Mirror walled off on its map", GREEN, ("MIRROR CONFIRMED: WALLED OFF", (16, 128, 84, 230))
     if mode == "announce":
         last = run.found[[f[0] for f in run.found].index(max(f[0] for f in run.found if f[0] <= t + 1e-6))] if run.found else None
         name = _name(last[1]) if last else _name(lab)
         return f"Found the {name}", GREEN, (f"FOUND THE {name.upper()}", (16, 128, 84, 230))
     if mode == "verify":
-        return f"At the {_name(lab)}? Checking with one more look", AMBER, (f"IS THIS THE {_name(lab).upper()}?", (196, 120, 0, 230))
+        return f"Close-up check: {_name(lab)}?", AMBER, (f"IS THIS THE {_name(lab).upper()}?", (196, 120, 0, 230))
     if mode == "approach":
-        return f"Heading to the {_name(lab)} it saw", BLUE, None
+        return f"Heading to the {_name(lab)}", BLUE, None
     return f"Exploring for the {_name(lab)}", TEXT, None
 
 
-def _strip(img, run, t, x, foresight, instructions):
+def _strip(img, run, t, x, foresight, instructions, near_miss=None):
     _box(img, (x, STRIP_Y, x + PW, STRIP_Y + STRIP_H), PANEL + (255,))
     d = ImageDraw.Draw(img)
-    head, color, _ = _status(run, t, foresight)
+    head, color, _ = _status(run, t, foresight, near_miss)
     d.text((x + 24, STRIP_Y + 24), head, font=_font("Bold", 40), fill=color)
     # instruction chips: done / current / pending
     st = run.step(t)
@@ -264,7 +329,7 @@ def _strip(img, run, t, x, foresight, instructions):
     for i in reversed(range(len(instructions))):
         lab = _name(instructions[i])
         done = i < found_now
-        txt = ("✓ " if done else "") + lab
+        txt = lab + (": found" if done else "")
         w = d.textlength(txt, font=_font("Bold", 28)) + 28
         fill = (16, 128, 84) if done else ((60, 72, 92) if i == k else (36, 40, 50))
         d.rounded_rectangle((cx - w, STRIP_Y + 26, cx, STRIP_Y + 70), 22, fill=fill)
@@ -272,38 +337,28 @@ def _strip(img, run, t, x, foresight, instructions):
         cx -= w + 10
 
 
-def _hud(img, run, t, xy, w, h, foresight):
-    x, y = xy
-    _box(img, (x, y, x + w, y + h), PANEL + (255,))
-    d = ImageDraw.Draw(img)
+def _hud(img, run, t, x, foresight):
+    """Overlay at the camera's bottom-left: speed, and for FORESIGHT Laya's P(mirror) and Qwen's latest note."""
     st = run.step(t)
-    d.text((x + 22, y + 18), "Speed", font=_font("Regular", 24), fill=MUTED)
-    d.text((x + 22, y + 46), f"{max(0.0, st['linear_velocity']):.2f} m/s", font=_font("Bold", 40), fill=TEXT)
-    d.text((x + 22, y + 108), "Remembered", font=_font("Regular", 24), fill=MUTED)
-    ms = run.map_step(t)
-    yy = y + 140
-    for lab in dict.fromkeys(o["label"] for o in ms.get("memory", [])):
-        objs = [o for o in ms["memory"] if o["label"] == lab and not o["rejected"]]
-        conf = sum(1 for o in objs if o["hits"] >= 3 and o["hits"] > o["misses"])
-        d.text((x + 22, yy), f"{_name(lab)}: {conf} confirmed, {len(objs) - conf} maybe", font=_font("Medium", 24),
-               fill=LABEL_COLORS.get(lab, TEXT))
-        yy += 34
-    yy += 14
-    if foresight:
-        d.text((x + 22, yy), "Laya: P(mirror)", font=_font("Regular", 24), fill=MUTED)
-        p = st.get("p_hazard", 0.0)
-        d.rounded_rectangle((x + 22, yy + 36, x + w - 22, yy + 54), 9, fill=DIM)
-        d.rounded_rectangle((x + 22, yy + 36, x + 22 + max(18, int((w - 44) * p)), yy + 54), 9, fill=RED if p > 0.6 else GREEN)
-        d.text((x + 22, yy + 62), f"{p:.2f} · {st.get('laya_infer_ms', 0):.0f} ms per decision", font=_font("Bold", 24), fill=TEXT)
-        yy += 104
-        note = st.get("description")
-        if note:
-            d.text((x + 22, yy), "Latest Qwen note:", font=_font("Regular", 22), fill=MUTED)
-            _text_block(d, (x + 22, yy + 30), "“" + " ".join(note.split()) + "”", _font("Italic", 22), TEXT, w - 44,
-                        max(1, int((y + h - yy - 50) / 29)))
-    else:
-        _text_block(d, (x + 22, yy), "No scene notes: Qwen only spots objects and hints a direction.",
-                    _font("Regular", 24), MUTED, w - 44, 4)
+    w = PW - INSET - 60
+    h = 300 if foresight else 96
+    y = PANEL_Y + PW - h - 20
+    _box(img, (x + 18, y, x + 18 + w, y + h), (8, 10, 14, 215), radius=14)
+    d = ImageDraw.Draw(img)
+    d.text((x + 38, y + 18), "Speed", font=_font("Regular", 26), fill=MUTED)
+    d.text((x + 140, y + 12), f"{max(0.0, st['linear_velocity']):.2f} m/s", font=_font("Bold", 38), fill=TEXT)
+    if not foresight:
+        return
+    p = st.get("p_hazard", 0.0)
+    d.text((x + 38, y + 72), "Laya: mirror?", font=_font("Regular", 26), fill=MUTED)
+    bx0, bx1 = x + 240, x + w - 150
+    d.rounded_rectangle((bx0, y + 78, bx1, y + 98), 10, fill=DIM)
+    d.rounded_rectangle((bx0, y + 78, bx0 + max(20, int((bx1 - bx0) * p)), y + 98), 10, fill=RED if p > 0.6 else GREEN)
+    d.text((bx1 + 14, y + 68), f"{p:.2f}", font=_font("Bold", 34), fill=TEXT)
+    d.text((x + 38, y + 112), f"{st.get('laya_infer_ms', 0):.0f} ms per decision, every tick", font=_font("Regular", 22), fill=MUTED)
+    note = st.get("description")
+    if note:
+        _text_block(d, (x + 38, y + 150), "Qwen: “" + " ".join(note.split()) + "”", _font("Italic", 24), TEXT, w - 40, 4)
 
 
 # ---------------------------------------------------------------- schedule & narration
@@ -353,58 +408,88 @@ def _pieces(end, slow, fast, slow_speed=1.0):
 
 
 def eval_summary(rows):
-    by = {}
+    """Per-condition totals over the evaluation set (the demo episode excluded). Episodes where any condition's run
+    was ended by a scan hole (see objectnav_eval) are voided for every condition."""
+    void = {r["episode"] for r in rows if r.get("ended_by_scan_hole")}
+    by = {"voided": sorted(void)}
     for r in rows:
-        if r["episode"].startswith("mirror-sofa-bed"):
+        if r["episode"].startswith("mirror-sofa-bed") or r["episode"] in void:
             continue
-        c = by.setdefault(r["condition"], {"n": 0, "success": 0, "spl": 0.0, "crash": 0, "mirror_eps": 0, "mirror_crash": 0})
+        c = by.setdefault(r["condition"], {"n": 0, "success": 0, "near": 0, "timeout": 0, "spl": 0.0, "crash": 0,
+                                           "mirror_crash": 0, "scrapes": []})
         c["n"] += 1
         leg = r["legs"][0]
         c["success"] += int(leg["success"])
+        c["near"] += int(leg["declared"] and not r["crashed"] and leg.get("dist_to_nearest_m", 9) <= 1.5)
+        c["timeout"] += int(not leg["declared"] and not r["crashed"])
         c["spl"] += leg["spl"]
         c["crash"] += int(r["crashed"])
-        if "mirror" in r["episode"]:
-            c["mirror_eps"] += 1
-            c["mirror_crash"] += int(r["crashed"])
-    for c in by.values():
-        c["spl"] /= max(c["n"], 1)
+        c["mirror_crash"] += int(r.get("crash_at_mirror", False))
+        c["scrapes"].append(r["navmesh_collisions"])
+    for k, c in by.items():
+        if k != "voided":
+            c["spl"] /= max(c["n"], 1)
     return by
 
 
-def narration(base: Run, fore: Run, instructions, summary, n_scenes):
-    t_conf = fore.mirror_time("confirmed")
-    f1, f2 = (fore.found + [None, None])[:2]
+def _finish(run, n_legs):
+    return run.found[n_legs - 1][0] if len(run.found) >= n_legs else None
+
+
+def narration(base: Run, fore: Run, instructions, summary, n_scenes, mirror_xz, start_xz):
+    """Voice-over, worded from what the runs actually did (crash or near miss, memory or re-search, who finished)."""
+    a, b = _name(instructions[0]), _name(instructions[1]) if len(instructions) > 1 else None
+    in_mirror = base.behind_mirror(mirror_xz, start_xz)
     lines = {
-        "hook": f"FORESIGHT, find the {_name(instructions[0])}. Then go back to the {_name(instructions[1])}.",
-        "lure": "No map. No coordinates. Just one camera. To find the sofa, the robot must explore, and head for open "
-                "space it hasn't seen yet. But this hallway is a mirror. Depth reads it as eight metres of open floor, "
-                "and Qwen even spots furniture inside the reflection.",
+        "hook": f"FORESIGHT, find the {a}." + (f" Then go back to the {b}." if b else ""),
+        "lure": f"No map. No coordinates. Just one camera. To find the {a}, the robot must explore: head for open space "
+                "it hasn't seen yet. But this hallway is a mirror. Depth reads it as open floor, "
+                + ("and Qwen even spots furniture inside the reflection." if in_mirror else
+                   "so it looks like the best place to explore."),
         "race_intro": "Both robots explore the same way, and use Qwen to spot objects. Only FORESIGHT also has Laya, "
                       "reading Qwen's scene notes for reflections.",
-        "race_crash": "The baseline heads for the reflected room, and drives straight into the mirror.",
     }
-    if t_conf is not None:
+    if base.crash is not None:
+        lines["race_base_mirror"] = "The baseline heads for the reflected room, and drives straight into the mirror."
+    else:
+        nm = base.mirror_encounter(mirror_xz)
+        if nm is not None:
+            lines["race_base_mirror"] = f"The baseline heads for the reflection too. It stops just {nm[1]:.1f} metres short."
+    if fore.mirror_time("confirmed") is not None:
         lines["race_flag"] = "Laya flags a reflection. FORESIGHT stops, and takes a second look."
         lines["race_confirm"] = "Confirmed. A wall goes on its map, and anything seen inside the mirror is ignored."
-    lines["race_explore"] = ("So FORESIGHT explores the real house. A hint from Qwen, about which way the sofa might be, "
+    lines["race_explore"] = (f"So FORESIGHT explores the real house. A hint from Qwen, about which way the {a} might be, "
                              "nudges where it looks next.")
+    f1, f2 = _finish(fore, 1), _finish(fore, 2)
     if f1 is not None:
-        lines["race_found1"] = (f"Sofa seen three times, then checked up close. Found, at {f1[0]:.0f} seconds.")
-    if f2 is not None:
-        lines["race_memory"] = ("Now, back to the bed. It saw one on the way out, so it plans straight there, "
-                                "from memory.")
-        crashes = "no crashes" if fore.crash is None else "one crash"
-        lines["race_found2"] = f"Bed found. Both objects in {f2[0]:.0f} seconds, with {crashes}."
+        lines["race_found1"] = f"{a.capitalize()} seen three times, then checked up close. Found, at {f1:.0f} seconds."
+    if b and f2 is not None:
+        t_ins = fore.event_time("instruction")
+        t_tgt = fore.event_time("target_on_map", instructions[1])
+        if t_ins is not None and t_tgt is not None and t_tgt - t_ins < 1.0:
+            lines["race_memory"] = f"Now, back to the {b}. It already has one on its map, so it plans straight there."
+        else:
+            lines["race_memory"] = f"Now, the {b}. It searches again."
+        crash = "no crashes" if fore.crash is None else "one crash"
+        lines["race_found2"] = f"{b.capitalize()} found. Both objects in {f2:.0f} seconds, with {crash}."
+    n = len(instructions)
+    if base.crash is None:
+        bf = _finish(base, n)
+        lines["race_base_done"] = (f"The baseline gets there too, at {bf:.0f} seconds." if bf is not None
+                                   else "The baseline runs out of time.")
     lines["how"] = ("Two loops share one camera. The fast loop turns depth into a map, picks where to explore, and keeps "
                     "the robot safe. In the background, Qwen answers: is the object here, where is it, and which way to "
                     "look. Laya reads Qwen's notes every tick, and a reflection flagged twice becomes a wall.")
-    b, f = summary.get("baseline"), summary.get("foresight")
-    if b and f:
-        lines["score"] = (f"Then we ran {f['n']} fixed episodes in {_spoken_int(n_scenes).lower()} homes. FORESIGHT "
-                          f"found the object in {f['success']} of {f['n']}; the baseline in {b['success']}. From the "
-                          f"mirror start, the baseline crashed {b['mirror_crash']} times out of {b['mirror_eps']}; "
-                          f"FORESIGHT, {f['mirror_crash']}.")
-    lines["credits"] = "FORESIGHT. Zero-shot, in simulation, on a laptop GPU. A demo with honest numbers, not a solved problem."
+    bs, fs = summary.get("baseline"), summary.get("foresight")
+    if bs and fs:
+        times = lambda k: "once" if k == 1 else ("never" if k == 0 else f"{_spoken_int(k).lower()} times")
+        lines["score"] = (f"Then we ran {fs['n']} fixed episodes in {_spoken_int(n_scenes).lower()} homes, and the "
+                          f"honest answer is: neither robot is good yet. Within one metre, the baseline found the object "
+                          f"{times(bs['success'])}, FORESIGHT {times(fs['success'])}; most calls stopped just outside that "
+                          f"line, and FORESIGHT's slower looks ran out the clock more often. But the baseline crashed "
+                          f"{times(bs['crash'])}, {'every time' if bs['mirror_crash'] == bs['crash'] else str(bs['mirror_crash']) + ' times'} "
+                          f"into a mirror. FORESIGHT crashed {times(fs['crash'])}.")
+    lines["credits"] = "FORESIGHT. Zero-shot, in simulation, on a laptop GPU. Honest numbers, not a solved problem."
     return lines
 
 
@@ -435,23 +520,28 @@ def hook_frames(rgb, instructions, n):
         yield img.convert("RGB")
 
 
-def lure_frames(ex, base: Run, n):
+def lure_frames(ex, base: Run, n, mirror_cols=(0.36, 0.72)):
     """Start frame / depth model / sim GT, and the boxes Qwen put inside the mirror on the baseline's first looks."""
     rgb, pred, gt = ex["rgb"], ex["pred"], ex["gt"]
     h = gt.shape[0]
     cone = (slice(int(.4 * h), int(.9 * h)), slice(int(.25 * h), int(.75 * h)))
     p_ahead, g_ahead = float(np.median(pred[cone])), float(np.median(gt[cone]))
-    first = next((lk for _, lk in base.looks if any(lk["boxes"].values())), None)
+    # boxes from the opening looks (robot still at the start) that sit in the mirror's part of the frame
+    in_mirror = []
+    for _, lk in base.looks:
+        if lk["seen"] > 0.05:  # only the look taken on this very frame (the robot starts turning at once)
+            break
+        for lab, boxes in lk["boxes"].items():
+            in_mirror += [(lab, b) for b in boxes if mirror_cols[0] <= (b[0] + b[2]) / 2000 <= mirror_cols[1]]
     side = 580
     cam = Image.fromarray(rgb).resize((side, side), Image.LANCZOS).convert("RGBA")
-    if first is not None:
+    if in_mirror:
         dd = ImageDraw.Draw(cam)
-        for lab, boxes in first["boxes"].items():
-            for b in boxes:
-                x1, y1, x2, y2 = [v / 1000 * side for v in b]
-                col = LABEL_COLORS.get(lab, TEXT)
-                dd.rectangle((x1, y1, x2, y2), outline=col, width=5)
-                dd.text((x1 + 6, y1 + 4), _name(lab) + "?", font=_font("Bold", 28), fill=col, stroke_width=3, stroke_fill=(0, 0, 0))
+        for lab, b in in_mirror:
+            x1, y1, x2, y2 = [v / 1000 * side for v in b]
+            col = LABEL_COLORS.get(lab, TEXT)
+            dd.rectangle((x1, y1, x2, y2), outline=col, width=5)
+            dd.text((x1 + 6, y1 + 4), _name(lab) + "?", font=_font("Bold", 28), fill=col, stroke_width=3, stroke_fill=(0, 0, 0))
     dm = _depth_img(pred, 8.0, side).convert("RGBA")
     gm = _depth_img(gt, 8.0, side).convert("RGBA")
     for k in range(n):
@@ -460,7 +550,8 @@ def lure_frames(ex, base: Run, n):
         d.text((60, 50), "Why a mirror lures an explorer", font=_font("Bold", 80), fill=TEXT)
         d.text((60, 150), "The robot's first frame. Exploring means heading for open space it hasn't seen yet.",
                font=_font("Regular", 36), fill=MUTED)
-        for i, (im, title) in enumerate([(cam, "Camera + what Qwen spots"), (dm, "What the depth model thinks"),
+        cam_title = "Camera + Qwen's boxes in the mirror" if in_mirror else "What the camera sees"
+        for i, (im, title) in enumerate([(cam, cam_title), (dm, "What the depth model thinks"),
                                          (gm, "What's really there")]):
             x = 60 + i * (side + 40)
             d.text((x, 240), title, font=_font("Bold", 36), fill=TEXT)
@@ -481,6 +572,7 @@ def lure_frames(ex, base: Run, n):
 
 def race_frames(scene, views, base, fore, sch, instructions, start_xz, mirror_xz, place):
     labels = list(dict.fromkeys(instructions))
+    near = None if base.crash is not None else base.mirror_encounter(mirror_xz)
     for k in range(int(sch.length * FPS)):
         t, speed = sch.sim(k / FPS)
         img = Image.new("RGBA", (S, S), BG)
@@ -504,13 +596,14 @@ def race_frames(scene, views, base, fore, sch, instructions, start_xz, mirror_xz
             d.text((x + d.textlength(title, font=_font("Black", 34)) + 16, 152), sub, font=_font("Regular", 26), fill=MUTED)
         for run, x, color, fs in [(base, LX, RED, False), (fore, RX, GREEN, True)]:
             tt = min(t, run.end)
+            nm = None if fs else near
             _first_person(img, views, run, tt, x, labels)
-            _, _, banner = _status(run, tt, fs)
+            _, _, banner = _status(run, tt, fs, nm)
             if banner:
                 _banner(img, x, PANEL_Y, PW, banner[0], banner[1])
-            _strip(img, run, tt, x, fs, instructions)
-            _map(img, scene, run, tt, (x, BOT_Y), MAP, color, start_xz, mirror_xz, foresight=fs)
-            _hud(img, run, tt, (x + MAP + 14, BOT_Y), PW - MAP - 14, BOT_H, fs)
+            _hud(img, run, tt, x, fs)
+            _strip(img, run, tt, x, fs, instructions, nm)
+            _map(img, scene, run, tt, (x, BOT_Y), color, start_xz, mirror_xz)
         yield img.convert("RGB")
 
 
@@ -557,7 +650,7 @@ def how_frames(n, look_ms, laya_ms, depth_ms):
         if t >= 6.0:
             _arrow(d, edge("laya", "bottom"), edge("memory", "top"), grey)
             _arrow(d, edge("memory", "left"), (edge("map", "right")[0] + 4, edge("map", "right")[1] + 30), RED)
-            d.text((870, 880), "objects + mirror walls", font=_font("Bold", 28), fill=RED)
+            d.text((830, 1000), "objects + mirror walls", font=_font("Bold", 28), fill=RED)
         for key, ((cx, cy), title, sub, color, ta) in boxes.items():
             if t < ta:
                 continue
@@ -576,27 +669,35 @@ def how_frames(n, look_ms, laya_ms, depth_ms):
 
 def score_frames(summary, n_eps_scenes, n):
     b, f = summary["baseline"], summary["foresight"]
-    rows = [("Found the object", f"{b['success']}/{b['n']}", f"{f['success']}/{f['n']}"),
-            ("SPL (path efficiency, 0-1)", f"{b['spl']:.2f}", f"{f['spl']:.2f}"),
-            ("Episodes ending in a crash", f"{b['crash']}/{b['n']}", f"{f['crash']}/{f['n']}"),
-            ("…from the mirror start", f"{b['mirror_crash']}/{b['mirror_eps']}", f"{f['mirror_crash']}/{f['mirror_eps']}")]
+    rows = [("Found it (stopped within 1 m)", f"{b['success']}/{b['n']}", f"{f['success']}/{f['n']}"),
+            ("Stopped near it (within 1.5 m)", f"{b['near']}/{b['n']}", f"{f['near']}/{f['n']}"),
+            ("Ran out of time (180 s)", f"{b['timeout']}/{b['n']}", f"{f['timeout']}/{f['n']}"),
+            ("Runs ending in a crash", f"{b['crash']}/{b['n']}", f"{f['crash']}/{f['n']}"),
+            ("…of those, into a mirror", f"{b['mirror_crash']}", f"{f['mirror_crash']}")]
     img = Image.new("RGB", (S, S), BG)
     d = ImageDraw.Draw(img)
     d.text((100, 120), "FORESIGHT", font=_font("Black", 60), fill=MUTED)
     d.text((100, 200), "Fixed evaluation set", font=_font("Bold", 92), fill=TEXT)
+    void = summary.get("voided", [])
     d.text((100, 320), f"{b['n']} episodes in {n_eps_scenes} homes, picked by a seeded script before any run. "
            "Success = stop within 1 m of the named object.", font=_font("Regular", 34), fill=MUTED)
+    if void:
+        d.text((100, 370), f"{len(void)} more voided for both: the camera met a hole in the 3D scan "
+               f"({', '.join(void)}).", font=_font("Regular", 30), fill=MUTED)
     d.text((1000, 470), "Baseline", font=_font("Bold", 52), fill=RED)
     d.text((1430, 470), "FORESIGHT", font=_font("Bold", 52), fill=GREEN)
     for i, (lab, bv, fv) in enumerate(rows):
-        y = 590 + i * 170
-        d.rounded_rectangle((90, y - 20, S - 90, y + 120), 18, fill=PANEL)
+        y = 590 + i * 150
+        d.rounded_rectangle((90, y - 16, S - 90, y + 116), 18, fill=PANEL)
         d.text((130, y + 22), lab, font=_font("Medium", 48), fill=TEXT)
         d.text((1000, y + 12), bv, font=_font("Black", 68), fill=TEXT)
         d.text((1430, y + 12), fv, font=_font("Black", 68), fill=TEXT)
-    _text_block(d, (100, 1330), "Same explorer, same object spotting, same safety layer; the only difference is Laya "
-                "reading Qwen's scene notes for reflections. Small sample, one simulator: read the counts, not the "
-                "percentages.", _font("Regular", 42), MUTED, S - 200, 5)
+    _text_block(d, (100, 1360), "Same explorer, same object spotting, same safety layer; FORESIGHT adds Laya reading "
+                f"Qwen's scene notes for reflections, which makes each look slower ({summary['look_s']['foresight']:.1f} s "
+                f"vs {summary['look_s']['baseline']:.1f} s). Crash = driving forward within 0.3 m of a surface "
+                f"(simulator ground truth). Wall scrapes while turning, median per run: baseline "
+                f"{np.median(b['scrapes']):.0f}, FORESIGHT {np.median(f['scrapes']):.0f} ticks. Small sample, one "
+                "simulator: read the counts, not the percentages.", _font("Regular", 36), MUTED, S - 200, 7)
     for _ in range(n):
         yield img
 
@@ -621,29 +722,32 @@ def credits_frames(n):
 # ---------------------------------------------------------------- assembly
 
 
-def race_plan(base: Run, fore: Run, dur):
+def race_plan(base: Run, fore: Run, dur, mirror_xz):
     """Slow (1x) windows around the events the voice-over talks about; the rest fast, sized so the lines fit."""
+    nm = base.crash if base.crash is not None else (base.mirror_encounter(mirror_xz) or (None,))[0]
+    n = max(len(fore.found), len(base.found), 1)
     ev = {
-        "race_flag": fore.mirror_time("flag"), "race_confirm": fore.mirror_time("confirmed"), "race_crash": base.crash,
+        "race_flag": fore.mirror_time("flag"), "race_confirm": fore.mirror_time("confirmed"), "race_base_mirror": nm,
         "race_explore": (fore.mirror_time("confirmed") or 10.0) + 4.0,
-        "race_found1": fore.found[0][0] if fore.found else None,
-        "race_memory": fore.event_time("instruction"),
-        "race_found2": fore.found[1][0] if len(fore.found) > 1 else None,
+        "race_found1": _finish(fore, 1), "race_memory": fore.event_time("instruction"), "race_found2": _finish(fore, 2),
+        "race_base_done": _finish(base, n) if base.crash is None else None,
     }
+    if ev["race_base_done"] is None and base.crash is None:
+        ev["race_base_done"] = base.end
     ev = {k: v for k, v in ev.items() if v is not None and k in dur}
     order = sorted(ev, key=lambda k: ev[k])
-    end = fore.end
-    slow = [(0.0, 3.0)] + [(ev[k] - 2.0, ev[k] + 3.0) for k in ("race_flag", "race_confirm", "race_crash") if k in ev] \
-        + [(ev[k] - 3.0, ev[k] + 2.5) for k in ("race_found1", "race_found2") if k in ev]
-    for fast in (3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0):
-        pieces = _pieces(end, slow, fast)
-        sch = Schedule(pieces, dur["race_intro"] + 0.9, 0.0)
-        cues, last = _place(order, [sch.video(ev[k]) + 0.2 for k in order], dur, gap=0.4)
-        late = max(c[0] - sch.video(ev[k]) for c, k in zip(cues, order))
-        if late <= 6.0 and sch.length < 110:
-            hold = max(2.5, last - sch.length + 1.0)
-            sch = Schedule(pieces, sch.pre_s, hold)
-            return sch, [(0.4, "race_intro")] + cues
+    end = max(fore.end, base.end)
+    slow = [(0.0, 3.0)] + [(ev[k] - 2.0, ev[k] + 5.0) for k in ("race_flag", "race_confirm", "race_base_mirror") if k in ev] \
+        + [(ev[k] - 3.0, ev[k] + 2.5) for k in ("race_found1", "race_found2", "race_base_done") if k in ev]
+    for slow_speed in (1.0, 0.75, 0.5):  # key moments in slow motion if their lines need the room
+        for fast in (3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0):
+            pieces = _pieces(end, slow, fast, slow_speed)
+            sch = Schedule(pieces, dur["race_intro"] + 0.9, 0.0)
+            cues, last = _place(order, [sch.video(ev[k]) + 0.2 for k in order], dur, gap=0.4)
+            late = max(c[0] - sch.video(ev[k]) for c, k in zip(cues, order) if k != "race_explore")  # generic line
+            if late <= 4.0 and sch.length < 150:
+                hold = max(2.5, last - sch.length + 1.0)
+                return Schedule(pieces, sch.pre_s, hold), [(0.4, "race_intro")] + cues
     raise RuntimeError("narration doesn't fit the race")
 
 
@@ -655,14 +759,22 @@ def render_video(root: Path, episode: dict, eval_rows: list, n_eval_scenes: int,
     scene = Scene(ep_dir)
     ex = dict(np.load(ep_dir / "explainer.npz"))
     summary = eval_summary(eval_rows) if eval_rows else {}
+    if summary:
+        lat = {"baseline": [], "foresight": []}
+        for d in root.iterdir():
+            for c in lat:
+                m = d / f"{c}_meta.json"
+                if m.exists() and d.name != episode["name"]:
+                    lat[c] += json.loads(m.read_text())["look_latency_s"]
+        summary["look_s"] = {c: float(np.median(v)) if v else float("nan") for c, v in lat.items()}
     instructions = episode["instructions"]
-    vo = Voice(narration(base, fore, instructions, summary, n_eval_scenes), ep_dir / "narration", tts_python,
-               kokoro_home, voice)
-    dur = vo.dur
-    views = _Views(episode, size=768)
-    sch, race_cues = race_plan(base, fore, dur)
     start_xz = np.asarray(episode["start"], float)[[0, 2]]
     mirror_xz = episode.get("mirror_xz")
+    vo = Voice(narration(base, fore, instructions, summary, n_eval_scenes, mirror_xz, start_xz), ep_dir / "narration",
+               tts_python, kokoro_home, voice)
+    dur = vo.dur
+    views = _Views(episode, size=768)
+    sch, race_cues = race_plan(base, fore, dur, mirror_xz)
     look_ms = float(np.median(fore.meta["look_latency_s"])) * 1000
     depth_ms = float(np.median([s["depth_ms"] for s in fore.ep.steps]))
 

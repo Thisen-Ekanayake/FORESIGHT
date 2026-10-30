@@ -32,7 +32,15 @@ milestone status in `PROGRESS.md`.
 - `MapNavigator`: `replan_look`, `plan_kw`, `last_path`; `BackgroundDescriber`: `min_latency_s`, `_deliver` hook;
   `timed_episode`: `episode_done` diagnostic ends a run, `oracle_semantic` for harnesses.
 
+### Results
+- Evaluation of the fixed set (15 scored, 1 voided for a scan hole): found within 1 m — baseline 2, FORESIGHT 0;
+  crashes 5 vs 1 (all baseline crashes at the 00808 hallway mirror). Demo episode: both complete sofa → bed,
+  FORESIGHT 190 s / SPL 0.42, 0.38 vs 244 s / 0.17, 0.18. Details: `docs/src/foresight/planning/object_search.md`.
+- Narrated 1920×1920 video, 3:47 (`tools/run_object_search.py --phase render`): instruction hook, mirror lure, side-by-side search with each robot's revealed map, how-it-works diagram, scoreboard.
+
 ### Fixed
+- Scoring: a "crash" whose ground-truth depth ahead is ~0 is a hole in the scanned mesh, reported as
+  `ended_by_scan_hole` and voided for every condition.
 - HM3D semantic `aabb` is stretched to the world origin in habitat-sim 0.3.3; scoring uses `obb`, which is only
   populated when the semantic mesh is loaded together with an RGB sensor.
 

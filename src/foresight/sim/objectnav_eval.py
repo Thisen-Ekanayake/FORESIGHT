@@ -127,11 +127,19 @@ def score_episode(dataset_config: str, scene_id: str, ep, instructions, success_
                 break
             legs.append(leg)
         crashed = ep.contact_at is not None
-        if crashed:  # a crash ends the run: anything after it can't count
+        # GT depth ~0 straight ahead is a hole in the scanned mesh (nothing rendered), not a surface: the contact rule
+        # fired on a simulator artifact. Reported separately; callers void the episode for every condition.
+        artifact = crashed and ep.steps[-1]["gt_depth_ahead_m"] < 0.05
+        crashed = crashed and not artifact
+        crash_at_mirror = False
+        if crashed:  # was it a mirror/glass? (nearest annotated reflective surface within 0.8 m of the robot)
+            mirrors = instances(sim, "mirror", floor_y, max_above_m=2.5)
+            crash_at_mirror = bool(mirrors) and min(distance_to(m, pos[-1]) for m in mirrors) <= 0.8
+        if crashed or artifact:  # the run ended there: anything after it can't count
             for leg in legs:
                 if leg.get("t_found") is not None and leg["t_found"] > ep.contact_at:
                     leg.update(success=False, spl=0.0)
-        return {"legs": legs, "crashed": crashed, "contact_at": ep.contact_at,
+        return {"legs": legs, "crashed": crashed, "ended_by_scan_hole": artifact, "crash_at_mirror": crash_at_mirror, "contact_at": ep.contact_at,
                 "navmesh_collisions": int(np.sum(ep.collided)),
                 "sim_s": float(times[-1] + ep.steps[-1]["dt"]) if len(times) else 0.0,
                 "end_mode": last.get("mode")}

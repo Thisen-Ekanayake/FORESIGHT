@@ -210,7 +210,9 @@ def assets(args, e, out: Path):
                     if o["hits"] >= 3 and not o["rejected"]]
     pts = np.array(pts, float)
     lo, hi = pts[:, [0, 2]].min(0), pts[:, [0, 2]].max(0)
-    width_m = float(max(6.0, (hi - lo).max() + 2.0))
+    from foresight.viz.object_search_video import MAP_H, MAP_W
+    # the video shows the square cutaway's middle MAP_H of MAP_W rows: frame the z extent for that crop
+    width_m = float(max(6.0, hi[0] - lo[0] + 2.0, (hi[1] - lo[1] + 2.0) * MAP_W / MAP_H))
     center = np.array([(lo[0] + hi[0]) / 2, e["start"][1], (lo[1] + hi[1]) / 2])
     R = args.map_res
     cfg = habitat_sim.SimulatorConfiguration()
