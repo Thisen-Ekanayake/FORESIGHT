@@ -74,3 +74,77 @@ Reading it honestly:
   the robot was turning, and it drove in 1.2 s later. Fixes to try next (not run): evaluate the in-path rule
   against the heading as well as the route; let a high-P flag stop forward motion until checked.
 - Walls drawn: 0–1 per run outside 00808, 1–5 inside it (00808 has 18 annotated mirrors).
+
+## Changes after the first set (2026-11-01)
+
+- **Close-in arrival**: after the close-up check confirms an object, the robot creeps at it (0.2 m/s) until the depth
+  ahead reads 0.6 m (or 6 s), and the find is recorded there. On the first set most "found" calls stopped 1.0–1.7 m away.
+- **Wall frame depth**: if the two surfaces framing a mirror read > 1.35× apart, the nearer one is something in front
+  of the mirror (a door frame): both wall ends go at the farther depth. A slanted wall had closed the 00808 bedroom
+  doorway in a dev run.
+- **Approach patience**: no 0.5 m progress towards a target for 40 s → it's rejected as unreachable.
+- **v1 pending flags**: an off-route flag is re-checked for 10 s against the route and the heading.
+- **FORESIGHT v2** ([`fast_slow`](fast_slow.md)): the scene note only for a mirror in the robot's way.
+
+## Results (fresh set, 2026-11-01)
+
+16 new episodes (`episodes_2027.json`, seed 2027, 6 in 00808), written and committed (`b38b4ed`) before any run on
+them, all three conditions with the changes above; 180 s each; `results/runs/object_search/fresh/eval.json`.
+No episode voided.
+
+| 16 episodes | Baseline | FORESIGHT v1 | FORESIGHT v2 |
+|---|---|---|---|
+| Found (stopped within 1 m) | 5 | 7 | 7 |
+| SPL (mean) | 0.17 | 0.23 | 0.30 |
+| Ran out of time | 5 | 4 | 5 |
+| Runs ending in a crash | 0 | 1 | 1 |
+| …at a mirror | 0 | 0 | 1 |
+| Look latency (median, all looks) | 0.34 s | 2.6 s | 0.5 s |
+| Wall-scrape ticks (median per run) | 46 | 32 | 20 |
+
+Demo episode (`mirror-sofa-bed`, start facing the hallway mirror, two legs, 300 s): baseline crashed into the hallway
+mirror at 18 s; v1 timed out without the sofa; v2 crashed into a closet mirror at 79 s.
+
+Reading it honestly:
+- Close-in arrival is the biggest change: success within 1 m went from 2 / 0 (first set, baseline / v1) to 5 / 7.
+  The remaining misses are mostly wrong objects declared 2–6 m away (a TV, a sofa-like chair) and timeouts.
+- v2 found as many objects as v1 with ~5× faster looks and the best SPL, but it is **not safer**: its one crash, and
+  its demo-episode crash, were both into the same 00808 closet mirror. Replaying those looks showed two bugs (fixed
+  in v2.1, see [fast_slow](fast_slow.md)): a candidate was dropped as "already known" because its midpoint was near
+  an earlier wall drawn at the wrong angle; and Qwen's "mirror" boxes landed on objects *inside* the reflection, so
+  no gap-based candidate was made at all.
+- This set's random starts rarely led the baseline into a mirror (0 crashes, vs 5 on the first set), so it says
+  little about mirror safety either way; the demo start does.
+- v1's crash (00802, not near an annotated mirror): monocular depth read 0.6–1.1 m ahead while the truth fell to
+  0.3 m, so the safety layer only slowed.
+
+## Results (third set, v2.1, 2026-11-01)
+
+FORESIGHT v2.1 (fixes from the second set's v2 crashes, see [fast_slow](fast_slow.md#v21-2026-11-01-commit-ffa11ce)) vs
+the baseline on 16 more episodes (`episodes_2028.json`, seed 2028), drawn and committed (`8d638e5`) after the fixes and
+before any run; `results/runs/object_search/set3/eval.json`. `s3-00800-refrigerator-2` voided (the baseline's run hit
+a scan hole), leaving 15. v1 was not run on this set (time).
+
+| 15 episodes | Baseline | FORESIGHT v2.1 |
+|---|---|---|
+| Found (stopped within 1 m) | 8 | 6 |
+| SPL (mean) | 0.25 | 0.22 |
+| Ran out of time | 2 | 6 |
+| Runs ending in a crash | 2 | 0 |
+| …at a mirror | 2 (00808) | 0 |
+| Wall-scrape ticks (median per run) | 44 | 63 |
+
+Demo episode: the baseline crashed into the hallway mirror at 18 s (as on the second set); v2.1 walled the hallway
+mirror off (two confirmed checks in its first 15 s), found the sofa at 91 s (SPL 0.68, 0.10 m), rejected what it took
+for the bed at the close-up check, and timed out at 300 s; no crash.
+
+Reading it honestly:
+- v2.1 removed the mirror crashes on unseen episodes (0 vs 2, and the demo start), but it finds fewer objects than the
+  baseline (6 vs 8) because it spends the time on checks: in 00808 (18 annotated mirrors) it stopped for 9–17 slow
+  checks per run, holding still 35–77 s of 180 s, and drew up to 14 walls, some across space it then couldn't explore.
+- So across three sets the trade-off moved but did not go away: v1 safe and slow (2.6 s looks); v2 fast but missed a
+  closet mirror; v2.1 safe again, with the cost moved from every look to the checks. Next: don't re-check a mirror
+  already walled from another angle, and only stop for a candidate within ~1.5 m rather than 3 m — to be tested on a
+  fourth set.
+- Most remaining misses for both: wrong objects declared 2–6 m away (sofa-like chairs, a TV across the room) and
+  toilets (small, behind doors; 0 of 5 found by either).

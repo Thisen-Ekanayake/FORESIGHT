@@ -3,7 +3,41 @@
 Notable changes to FORESIGHT, newest first. Day-by-day working notes live in `logs/` (untracked);
 milestone status in `PROGRESS.md`.
 
-## [Unreleased] — object search demo ("find the sofa")
+## [Unreleased] — FORESIGHT v2 / v2.1 and the Isaac Sim replay (2026-11-01)
+
+### Added
+- `planning/fast_slow.py` `FastSlowMirrorGuard` (FORESIGHT v2): yes/no mirror check + mirror box every look; the slow
+  Qwen scene note + Laya only when a candidate mirror wall (box + depth gap) lies on the route or heading; forward
+  motion vetoed until checked. Runner condition `foresight_fs`.
+- v2.1: candidates "known" only if they lie along an existing wall/dismissed candidate; "wedge" candidates from
+  confident mirror boxes without gap geometry.
+- Close-in arrival (`ObjectSearchNavigator(close_in=True)`), `MapNavigator.step(creep_mps=…)`, approach patience.
+- `PerceptionWorker(describe_when=…)`: on-demand, describe-only looks.
+- Second and third evaluation sets (`episodes_2027.json`, `episodes_2028.json`, `--seed/--set fresh`), each committed
+  before any run on it; `run_object_search.py --episodes fresh|set3`, `HF_HUB_OFFLINE=1` default.
+- Isaac Sim replay: `tools/export_hm3d_for_isaac.py`, `tools/isaac/export_run.py`, `tools/isaac/render_replay.py`,
+  `viz/isaac_replay.py`; docs `docs/tools/isaac.md`.
+- `viz/object_search_v2_video.py`, `run_object_search.py --phase render_v2`.
+
+### Changed
+- `ForesightNavigator` (v1): off-path flags stay pending 10 s and are checked if the route or heading turns into them.
+- `ObjectSearchNavigator.reflection_segments` split from `add_reflection_wall`; walls joined to a much nearer "frame"
+  surface (an occluder) use the farther depth for both ends.
+
+### Results
+- Second set (16 episodes): found within 1 m — baseline 5, v1 7, v2 7; SPL 0.17 / 0.23 / 0.30; looks 0.34 / 2.6 /
+  0.5 s; crashes 0 / 1 / 1 (v2's into a closet mirror, again on the demo start).
+- Third set (15 scored): baseline 8 found, 2 mirror crashes; v2.1 6 found, 0 crashes, 6 timeouts.
+- Details: `docs/src/foresight/planning/object_search.md`, `docs/src/foresight/planning/fast_slow.md`.
+
+### Fixed
+- A slanted mirror wall across the 00808 bedroom doorway (frame depth fix); an approach that pushed at a blocked target
+  for 214 s (approach patience); a hidden "confirmed" event when a new suspect started on the same tick.
+
+### Removed
+- 3.4 GB of stale mirror-trap pickles (`results/runs/mirror_trap_demo/hm3d-hallway-mirror/*.pkl`, untracked).
+
+## Object search demo ("find the sofa") — 2026-10-30
 
 ### Added
 - `CHANGELOG.md`.

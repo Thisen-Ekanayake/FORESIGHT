@@ -36,6 +36,8 @@ Each writes a first-person + top-down `.mp4` and a `metrics.json` under `results
 | Depth-only heuristic baseline (ablation control) | ✅ | [`docs/src/foresight/planning/depth_heuristic.md`](docs/src/foresight/planning/depth_heuristic.md) |
 | Trained PPO PointGoal navigator (extra baseline) | 🔵 | [`docs/rl/pointnav.md`](docs/rl/pointnav.md) |
 | Language-goal object search ("find the sofa, then the bed") + fixed 16-episode evaluation | 🔵 | [`docs/src/foresight/planning/object_search.md`](docs/src/foresight/planning/object_search.md), [`docs/tools/run_object_search.md`](docs/tools/run_object_search.md) |
+| FORESIGHT v2 / v2.1: fast/slow mirror handling, evaluated on two more seeded sets | 🔵 | [`docs/src/foresight/planning/fast_slow.md`](docs/src/foresight/planning/fast_slow.md) |
+| Isaac Sim replay of a run (HM3D home with ray-traced mirrors, Unitree Go2) | ✅ | [`docs/tools/isaac.md`](docs/tools/isaac.md) |
 | Difficulty-stratified benchmark (glass/mirror/low-light/blur) | ⬜ | — |
 
 ## Structure

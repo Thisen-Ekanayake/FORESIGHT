@@ -218,7 +218,7 @@ def assets(args, e, out: Path):
     from foresight.sim.sensors import make_sim_config
 
     pts = [e["start"]]
-    for cond in ("baseline", "foresight"):
+    for cond in ("baseline", "foresight", "foresight_fs"):
         if (out / f"{cond}.pkl").exists():
             with open(out / f"{cond}.pkl", "rb") as f:
                 ep = pickle.load(f)
@@ -323,6 +323,8 @@ def main():
     p.add_argument("--vlm-tokens", type=int, default=96)
     p.add_argument("--eval", default="results/runs/object_search/eval/eval.json", help="render: scoreboard source")
     p.add_argument("--video", default=None)
+    p.add_argument("--eval2", default="results/runs/object_search/fresh/eval.json",
+                   help="render_v2: the second set's eval.json (baseline, v1, v2)")
     p.add_argument("--old-eval", default="results/runs/object_search/eval/eval.json",
                    help="render_v2: the first set's eval.json (baseline vs v1), for the recap")
     p.add_argument("--isaac-dir", default=None, help="render_v2: tools/isaac/render_replay.py output for the Isaac segment")
@@ -354,12 +356,14 @@ def main():
     elif args.phase == "render_v2":
         from foresight.viz.object_search_v2_video import render_video as render_v2
         e = episode(names[0])
-        rows = json.loads(Path(args.eval).read_text())
+        rows3 = json.loads((Path(args.out) / "eval.json").read_text())
+        rows2 = json.loads(Path(args.eval2).read_text())
         old_rows = json.loads(Path(args.old_eval).read_text())
-        n_scenes = len({EPISODES[r["episode"]]["scene"] for r in rows if r["episode"] in EPISODES})
-        render_v2(Path(args.out), e, rows, old_rows, n_scenes, Path(args.video or Path(args.out) / "foresight_v2_object_search.mp4"),
+        scenes = tuple(len({EPISODES[r["episode"]]["scene"] for r in rows if r["episode"] in EPISODES}) for rows in (rows2, rows3))
+        render_v2(Path(args.out), e, rows3, rows2, old_rows, Path(args.video or Path(args.out) / "foresight_v2_object_search.mp4"),
                   args.tts_python, args.kokoro_home, args.voice, isaac_dir=args.isaac_dir and Path(args.isaac_dir),
-                  isaac_run=args.isaac_run and Path(args.isaac_run), old_root=Path(args.old_eval).parent)
+                  isaac_run=args.isaac_run and Path(args.isaac_run), root2=Path(args.eval2).parent,
+                  old_root=Path(args.old_eval).parent, scenes=scenes)
     elif args.phase == "run":
         for name in names:
             out = Path(args.out) / name

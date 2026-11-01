@@ -1,0 +1,49 @@
+# `foresight.planning.fast_slow` — FORESIGHT v2
+
+Fast/slow reflection handling for [object search](object_search.md). v1 (`laya_fusion.ForesightNavigator`) put a
+~2 s Qwen3-VL scene description on every look so Laya could check each one for mirrors: on the first evaluation set
+it crashed less than the baseline (1 vs 5 runs, every baseline crash at the 00808 hallway mirror) but its looks took
+2.6 s against 0.34 s, and it ran out of time 7 times against 2. v2 keeps the same two-signal rule for turning a
+mirror into a wall, but pays for the slow signal only when a mirror is in the robot's way.
+
+| Stage | Runs | Cost (RTX 4060) | What it gives |
+|---|---|---|---|
+| Fast check | every look | one forward pass (`option_probs`, "Is there a mirror in this image?"), plus grounding only if P(yes) > 0.5 | a mirror box |
+| Candidate wall | every look with a mirror box | none (depth scan of that frame) | `ObjectSearchNavigator.reflection_segments`: the boxed region grown sideways while it reads as deep; a candidate only if it reads ≥ 1.3× deeper than the real surfaces framing it (a phantom room) |
+| In the way? | every tick, per candidate (kept 15 s) | none | the planned route within 5 m, or a 2.5 m ray along the heading, crosses the candidate |
+| Slow check | only then | stop forward motion, face the view, the next look is the reflection-aware description alone (~2.5 s); Laya reads it (~25 ms) | P(mirror) > 0.6 → the candidate becomes a wall; else dismissed and not raised again; 14 s timeout |
+
+The rest is shared with the baseline and v1: explorer, object grounding and memory, close-in arrival, safety layer.
+Objects seen through a wall are ignored (`ObjectSearchNavigator.through_wall`).
+
+## Why these choices
+
+- The yes/no question is far more precise than the 2B model's boxes (presence probe: ≈1 on 11/12 frames with the
+  object, ≈0 on 19/20 without), so it gates the mirror grounding as it gates object grounding.
+- "In the way" uses the candidate's geometry, not the view's angle: v1's angular in-path test (route points within
+  ±25° of the flagged view) judged a P = 0.94 flag off-route while the robot was turning, and the robot drove into
+  that mirror 1.2 s later.
+- The note look skips the object queries: it exists only to be read by Laya, and the robot is standing still.
+
+## Results
+
+See [object_search.md](object_search.md#results-fresh-set-2026-11-01).
+
+## v2.1 (2026-11-01, commit `ffa11ce`)
+
+v2 (commit `b38b4ed`) was evaluated on the second set. Its mirror crash there (`s2-00808-tv-3`) and its crash on the
+demo episode were into the same 00808 closet mirror (sliding mirror doors). Replaying those looks offline (re-rendered
+frames, the same depth model and `reflection_segments`) showed:
+
+1. **A real candidate dropped as "known".** v2 treated a candidate as already handled if its midpoint was within
+   0.8 m of any wall's midpoint; an earlier wall drawn at the wrong angle nearby hid it. v2.1: known only if the
+   candidate lies *along* an existing wall or a dismissed candidate (both ends and its middle within 0.4 m of it).
+2. **No candidate at all.** Qwen's "mirror" boxes landed on objects inside the reflection (a TV, two pictures), which
+   read about as near as their frame, so there was no phantom-room gap. v2.1: a look with P(mirror) ≥ 0.9 also turns
+   each mirror box into a *wedge* (its bearing span from that pose, out to 3 m) when it has no gap geometry; if the
+   route or heading enters the wedge, the slow check runs. If Laya confirms, the wedge is walled across its span at the
+   nearest depth read inside it (0.6–2.0 m).
+
+Post-hoc check on those two episodes (not evidence by itself): no crash on either; tv found at 92 s; on the demo,
+the sofa found at 122 s, the bed rejected by the close-up check, timeout at 300 s. The test is the third set,
+drawn and committed (`8d638e5`) before any run on it.
