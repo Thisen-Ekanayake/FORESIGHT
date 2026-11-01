@@ -1,0 +1,246 @@
+{
+ "seed": 2027,
+ "note": "fixed before any evaluation run; do not edit by hand",
+ "episodes": [
+  {
+   "name": "s2-00808-sofa-1",
+   "scene": "00808-y9hTuugGdiq",
+   "start": [
+    -0.584,
+    0.061,
+    3.036
+   ],
+   "yaw_deg": -150.3,
+   "instructions": [
+    "sofa"
+   ],
+   "max_sim_s": 180.0,
+   "shortest_m": 3.49
+  },
+  {
+   "name": "s2-00808-tv-2",
+   "scene": "00808-y9hTuugGdiq",
+   "start": [
+    2.683,
+    0.061,
+    3.629
+   ],
+   "yaw_deg": -18.5,
+   "instructions": [
+    "tv"
+   ],
+   "max_sim_s": 180.0,
+   "shortest_m": 4.31
+  },
+  {
+   "name": "s2-00808-tv-3",
+   "scene": "00808-y9hTuugGdiq",
+   "start": [
+    -5.696,
+    0.061,
+    3.479
+   ],
+   "yaw_deg": 74.0,
+   "instructions": [
+    "tv"
+   ],
+   "max_sim_s": 180.0,
+   "shortest_m": 3.45
+  },
+  {
+   "name": "s2-00808-refrigerator-4",
+   "scene": "00808-y9hTuugGdiq",
+   "start": [
+    7.635,
+    0.061,
+    1.677
+   ],
+   "yaw_deg": 43.7,
+   "instructions": [
+    "refrigerator"
+   ],
+   "max_sim_s": 180.0,
+   "shortest_m": 5.65
+  },
+  {
+   "name": "s2-00808-tv-5",
+   "scene": "00808-y9hTuugGdiq",
+   "start": [
+    -4.564,
+    0.061,
+    2.935
+   ],
+   "yaw_deg": -147.7,
+   "instructions": [
+    "tv"
+   ],
+   "max_sim_s": 180.0,
+   "shortest_m": 3.24
+  },
+  {
+   "name": "s2-00808-tv-6",
+   "scene": "00808-y9hTuugGdiq",
+   "start": [
+    -4.451,
+    0.061,
+    1.05
+   ],
+   "yaw_deg": -176.8,
+   "instructions": [
+    "tv"
+   ],
+   "max_sim_s": 180.0,
+   "shortest_m": 3.02
+  },
+  {
+   "name": "s2-00800-bed-1",
+   "scene": "00800-TEEsavR23oF",
+   "start": [
+    -9.274,
+    0.163,
+    -0.845
+   ],
+   "yaw_deg": 142.9,
+   "instructions": [
+    "bed"
+   ],
+   "max_sim_s": 180.0,
+   "shortest_m": 9.27
+  },
+  {
+   "name": "s2-00800-sofa-2",
+   "scene": "00800-TEEsavR23oF",
+   "start": [
+    -3.781,
+    0.163,
+    -4.875
+   ],
+   "yaw_deg": 166.1,
+   "instructions": [
+    "sofa"
+   ],
+   "max_sim_s": 180.0,
+   "shortest_m": 4.56
+  },
+  {
+   "name": "s2-00800-tv-1",
+   "scene": "00800-TEEsavR23oF",
+   "start": [
+    -3.585,
+    3.163,
+    -0.577
+   ],
+   "yaw_deg": 31.4,
+   "instructions": [
+    "tv"
+   ],
+   "max_sim_s": 180.0,
+   "shortest_m": 9.23
+  },
+  {
+   "name": "s2-00800-tv-2",
+   "scene": "00800-TEEsavR23oF",
+   "start": [
+    -4.391,
+    3.163,
+    -0.765
+   ],
+   "yaw_deg": -143.3,
+   "instructions": [
+    "tv"
+   ],
+   "max_sim_s": 180.0,
+   "shortest_m": 8.59
+  },
+  {
+   "name": "s2-00802-toilet-1",
+   "scene": "00802-wcojb4TFT35",
+   "start": [
+    -0.71,
+    -0.005,
+    -6.092
+   ],
+   "yaw_deg": 106.6,
+   "instructions": [
+    "toilet"
+   ],
+   "max_sim_s": 180.0,
+   "shortest_m": 7.24
+  },
+  {
+   "name": "s2-00802-toilet-2",
+   "scene": "00802-wcojb4TFT35",
+   "start": [
+    -0.548,
+    -0.005,
+    -6.069
+   ],
+   "yaw_deg": -131.4,
+   "instructions": [
+    "toilet"
+   ],
+   "max_sim_s": 180.0,
+   "shortest_m": 7.67
+  },
+  {
+   "name": "s2-00802-toilet-3",
+   "scene": "00802-wcojb4TFT35",
+   "start": [
+    1.609,
+    0.143,
+    -9.119
+   ],
+   "yaw_deg": 151.9,
+   "instructions": [
+    "toilet"
+   ],
+   "max_sim_s": 180.0,
+   "shortest_m": 3.4
+  },
+  {
+   "name": "s2-00802-sofa-4",
+   "scene": "00802-wcojb4TFT35",
+   "start": [
+    1.785,
+    0.151,
+    -8.751
+   ],
+   "yaw_deg": 80.5,
+   "instructions": [
+    "sofa"
+   ],
+   "max_sim_s": 180.0,
+   "shortest_m": 5.77
+  },
+  {
+   "name": "s2-00803-sofa-1",
+   "scene": "00803-k1cupFYWXJ6",
+   "start": [
+    5.165,
+    6.527,
+    2.377
+   ],
+   "yaw_deg": -129.7,
+   "instructions": [
+    "sofa"
+   ],
+   "max_sim_s": 180.0,
+   "shortest_m": 4.34
+  },
+  {
+   "name": "s2-00803-sofa-2",
+   "scene": "00803-k1cupFYWXJ6",
+   "start": [
+    5.157,
+    6.527,
+    2.266
+   ],
+   "yaw_deg": 176.9,
+   "instructions": [
+    "sofa"
+   ],
+   "max_sim_s": 180.0,
+   "shortest_m": 4.29
+  }
+ ]
+}

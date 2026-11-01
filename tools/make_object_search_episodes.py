@@ -5,7 +5,12 @@ Per scene/floor: random navigable start, random yaw, a target category with an a
 3-12 m away by the shortest path to a success point (within 1 m of an instance), and not visible from the start
 (< 0.5% of pixels). Plus the 00808 mirror-pose episodes (start facing the hallway mirror). Output:
 experiments/configs/object_search/episodes.json, read by tools/run_object_search.py --episodes eval.
+
+  --seed 2027 --set fresh   the second set (2026-11-01), drawn after the first set's results had been looked at, for
+                            testing the fixes made because of them: more 00808 starts (the house with the hallway
+                            mirror), no hand-placed mirror starts -> experiments/configs/object_search/episodes_2027.json
 """
+import argparse
 import json
 import math
 import sys
@@ -28,10 +33,20 @@ MIRROR_START = dict(start=[-2.592, 0.061, 0.290], yaw_deg=-89.1)
 OUT = Path("experiments/configs/object_search/episodes.json")
 
 
+PLAN_FRESH = [("00808-y9hTuugGdiq", 0.06, 6), ("00800-TEEsavR23oF", 0.2, 2), ("00800-TEEsavR23oF", 3.2, 2),
+              ("00802-wcojb4TFT35", 0.0, 4), ("00803-k1cupFYWXJ6", 6.5, 2)]
+
+
 def main():
-    rng = np.random.default_rng(2026)
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--seed", type=int, default=2026)
+    ap.add_argument("--set", choices=["first", "fresh"], default="first")
+    args = ap.parse_args()
+    fresh = args.set == "fresh"
+    out = OUT.with_name(f"episodes_{args.seed}.json") if fresh else OUT
+    rng = np.random.default_rng(args.seed)
     eps = []
-    for scene, floor, n in PLAN:
+    for scene, floor, n in (PLAN_FRESH if fresh else PLAN):
         sim = habitat_sim.Simulator(make_sim_config(HM3D, scene, 320, 320, sensor_uuids=("rgb", "depth", "semantic")))
         agent = sim.get_agent(0)
         labels = [l for l in LABELS if instances(sim, l, floor)]
@@ -60,13 +75,17 @@ def main():
                             shortest_m=round(d, 2)))
             print(eps[-1], flush=True)
         sim.close()
-    for lab in ["tv", "refrigerator"]:
-        eps.append(dict(name=f"00808-mirror-{lab}", scene="00808-y9hTuugGdiq", **MIRROR_START,
-                        instructions=[lab], max_sim_s=180.0))
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(json.dumps({"seed": 2026, "note": "fixed before any evaluation run; do not edit by hand",
+    if not fresh:
+        for lab in ["tv", "refrigerator"]:
+            eps.append(dict(name=f"00808-mirror-{lab}", scene="00808-y9hTuugGdiq", **MIRROR_START,
+                            instructions=[lab], max_sim_s=180.0))
+    if fresh:  # names distinct from the first set's
+        for e in eps:
+            e["name"] = "s2-" + e["name"]
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps({"seed": args.seed, "note": "fixed before any evaluation run; do not edit by hand",
                                "episodes": eps}, indent=1))
-    print(f"{len(eps)} episodes -> {OUT}")
+    print(f"{len(eps)} episodes -> {out}")
 
 
 if __name__ == "__main__":

@@ -46,9 +46,11 @@ class MapNavigator:
         self._trail = []  # (t, pos) for the stuck check
         self.scans: dict = {}  # sim time -> (pos, fwd, bearings, ranges): reflection walls are drawn from the flagged view
 
-    def step(self, depth: np.ndarray, pose: dict, t: float, face_xz=None):
+    def step(self, depth: np.ndarray, pose: dict, t: float, face_xz=None, creep_mps: float = 0.0):
         """face_xz: if given, hold position and turn to face this direction instead of following the route
-        (FORESIGHT uses it to look at a flagged view again); an ongoing look-around is paused meanwhile."""
+        (FORESIGHT uses it to look at a flagged view again); an ongoing look-around is paused meanwhile.
+        creep_mps: while facing, drive straight at this speed once within 15 deg of face_xz (closing in on an
+        object; the safety layer still applies)."""
         s = self.scale.update(depth)
         bearings, ranges = depth_scan(depth, s)
         pos = np.asarray(pose["position"], float)[[0, 2]]
@@ -65,7 +67,8 @@ class MapNavigator:
                 self._look = (self._look[0], self._look[1] + (t - self._last[0]), self._look[2])
             face = np.asarray(face_xz, float)
             err = float(np.arctan2(face @ right, face @ fwd))
-            linear, angular = 0.0, float(np.clip(self.heading_gain * err, -self.max_angular_radps, self.max_angular_radps))
+            linear = creep_mps if abs(err) < np.deg2rad(15.0) else 0.0
+            angular = float(np.clip(self.heading_gain * err, -self.max_angular_radps, self.max_angular_radps))
         elif self._maybe_look(t, pos, pl) or t < self._look[1]:
             looking = True
             linear, angular = 0.0, self.max_angular_radps

@@ -43,18 +43,22 @@ class PerceptionWorker(BackgroundDescriber):
                  describe: Optional[Callable[[np.ndarray], str]] = None, min_latency_s: float = 0.0,
                  direction: Optional[Callable[[np.ndarray, str], np.ndarray]] = None,
                  present: Optional[Callable[[np.ndarray, str], float]] = None, present_threshold: float = 0.5,
-                 extra_labels: List[str] = ()):
+                 extra_labels: List[str] = (), describe_when: Optional[Callable[[], bool]] = None):
         """direction(rgb, label) -> P(left, centre, right) as the way to search for `label` (asked for the
         first label, the current target). present(rgb, label) -> P(yes) to "is there a <label>?": grounding
         only runs when it is above `present_threshold` (the yes/no answer is far more precise than the 2B
         model's boxes: results/runs/object_search, a black bench scored 0.00 as a bed, which grounding boxed).
-        extra_labels: grounded on every look but never searched for (FORESIGHT: "mirror", to place reflection walls)."""
+        extra_labels: grounded on every look but never searched for (FORESIGHT: "mirror", to place reflection walls).
+        describe_when() -> bool, asked as a look starts: run the (slow) scene description on this look only if True
+        (fast/slow FORESIGHT describes only the views it is checking); None = every look."""
         def look(rgb):
             out = {"text": None, "boxes": {}, "ms": {}, "direction": None, "present": {}}
-            if describe is not None:
+            if describe is not None and (describe_when is None or describe_when()):
                 t0 = time.perf_counter()
                 out["text"] = describe(rgb)
                 out["ms"]["describe"] = (time.perf_counter() - t0) * 1000
+                if describe_when is not None:  # an on-demand check: the note is all it is for, deliver it sooner
+                    return out
             labs = labels()
             for lab in list(labs) + [l for l in extra_labels if l not in labs]:
                 t0 = time.perf_counter()
@@ -162,7 +166,14 @@ class ObjectSearchNavigator(MapNavigator):
     def __init__(self, instructions: List[str], worker: PerceptionWorker, start_xz, map_size_m: float = 30.0,
                  poll_worker: bool = True, arrive_m: float = 0.8, arrive_blocked_m: float = 1.4,
                  frontier_every_s: float = 1.0, verify_looks: int = 2, verify_timeout_s: float = 12.0,
-                 announce_s: float = 2.0, prior_weight_m: float = 4.0, **kw):
+                 announce_s: float = 2.0, prior_weight_m: float = 4.0, close_in: bool = True,
+                 close_in_stop_m: float = 0.6, close_in_mps: float = 0.2, close_in_s: float = 6.0,
+                 approach_patience_s: float = 40.0, **kw):
+        """close_in: once the close-up check confirms the object, drive straight at it until the depth ahead reads
+        `close_in_stop_m` (or `close_in_s` passes) before declaring it found. Without it most "found" calls ended
+        1.0-1.7 m away (arrival allows 1.4 m when blocked, and the estimate is the object's front face ~0.3 m off):
+        results/runs/object_search/eval, 2026-10-30. approach_patience_s: a target the robot gets no closer to
+        (by 0.5 m) for this long is rejected as unreachable and exploring resumes."""
         kw.setdefault("replan_look", False)
         # Margin over the 0.3 m crash rule: monocular depth is ~0.1 m optimistic up close.
         kw.setdefault("safety", ReactiveSafetyLayer(stop_distance_m=0.4, slow_distance_m=0.8, clearance_quantile=0.02))
@@ -175,7 +186,11 @@ class ObjectSearchNavigator(MapNavigator):
         self.arrive_m, self.arrive_blocked_m = arrive_m, arrive_blocked_m
         self.frontier_every_s, self.verify_looks, self.announce_s = frontier_every_s, verify_looks, announce_s
         self.verify_timeout_s = verify_timeout_s
-        self.mode = "explore"  # explore | approach | verify | announce | done | gave_up
+        self.close_in, self.close_in_stop_m, self.close_in_mps, self.close_in_s = close_in, close_in_stop_m, close_in_mps, close_in_s
+        self._close_since = None
+        self.approach_patience_s = approach_patience_s
+        self._progress = None  # (best distance to the target so far, at t)
+        self.mode = "explore"  # explore | approach | verify | close_in | announce | done | gave_up
         self._frontier = None  # (goal xz, chosen at t)
         self._frontier_t = -np.inf
         self._blacklist: list = []  # frontier spots already reached without resolving them
@@ -277,15 +292,21 @@ class ObjectSearchNavigator(MapNavigator):
     def _verify_result(self, t, seen_again: bool):
         v, o = self._verify, self._target
         v["looks"] += 1
-        if seen_again:
-            self.found.append((t, self.label, self._pos.tolist(), o.xz.tolist()))
-            self.events.append((t, "found", self.label))
-            self._verify, self.mode = None, "announce"
-            self._announce_until = t + self.announce_s
+        if seen_again and self.close_in:
+            self.events.append((t, "confirmed", self.label))
+            self._verify, self.mode, self._close_since = None, "close_in", t
+        elif seen_again:
+            self._declare(t)
         elif v["looks"] >= self.verify_looks:
             o.rejected = True
             self.events.append((t, "rejected", self.label))
             self._verify, self._target, self.mode = None, None, "explore"
+
+    def _declare(self, t):
+        self.found.append((t, self.label, self._pos.tolist(), self._target.xz.tolist()))
+        self.events.append((t, "found", self.label))
+        self._verify, self.mode = None, "announce"
+        self._announce_until = t + self.announce_s
 
     # -- goal selection -----------------------------------------------------------------------------------
     def _pick_frontier(self, t, pos):
@@ -327,7 +348,7 @@ class ObjectSearchNavigator(MapNavigator):
                 if self.label is not None:
                     self.events.append((t, "instruction", self.label))
             return
-        if self.mode in ("done", "gave_up", "verify"):
+        if self.mode in ("done", "gave_up", "verify", "close_in"):
             return
         o = self.memory.best(self.label, pos, self.through_wall)
         if o is not None:
@@ -355,21 +376,28 @@ class ObjectSearchNavigator(MapNavigator):
         self.goal = self._frontier[0]
 
     # -- reflections ------------------------------------------------------------------------------------------
-    def add_reflection_wall(self, seen_t: float, min_gap_ratio: float = 1.3, far_m: float = 4.0,
-                            extend_m: float = 0.25, hfov_deg: float = 90.0) -> bool:
+    def add_reflection_wall(self, seen_t: float, **kw) -> bool:
+        """Draw `reflection_segments(seen_t)` as virtual walls. -> whether any was drawn."""
+        segs = self.reflection_segments(seen_t, **kw)
+        for a, c, fwd in segs:
+            self.map.add_segment(a, c, fwd)
+        return bool(segs)
+
+    def reflection_segments(self, seen_t: float, min_gap_ratio: float = 1.3, far_m: float = 4.0,
+                            extend_m: float = 0.25, hfov_deg: float = 90.0) -> list:
         """Wall off a confirmed reflection where Qwen boxed the mirror in that view (not across the whole view: a
         note can be about something off to the side). Per mirror box: the scan bearings inside the box seed a
         "phantom" region, grown sideways while the scan stays about as deep; the first shallower hits on either
         side are the real surfaces framing the mirror, and the wall joins them (so it lies roughly on the mirror's
         plane and leaves no gap at its ends). Only if the phantom reads `min_gap_ratio` x deeper than its frame.
-        No mirror box, or no gap -> no wall."""
+        No mirror box, or no gap -> no wall. -> [(a_xz, b_xz, view fwd)]."""
         res = self.worker.results.get(seen_t)
         if res is None or seen_t not in self.scans:
-            return False
+            return []
         pos, fwd, b, r = self.scans[seen_t]
         r = np.where(np.isfinite(r), r, far_m)
         tan_h = np.tan(np.deg2rad(hfov_deg) / 2)
-        added = False
+        segs = []
         for box in res["boxes"].get("mirror", []):
             a1, a2 = (np.arctan((box[k] / 1000 - 0.5) * 2 * tan_h) for k in (0, 2))
             span = a2 - a1
@@ -389,15 +417,20 @@ class ObjectSearchNavigator(MapNavigator):
             d_edge = float(np.mean(r[frame]))
             if d_in < min_gap_ratio * d_edge:
                 continue
+            # If one "frame" reads much nearer than the other it is something standing in front of the mirror (a door
+            # frame on the near side), not the mirror's own frame: joining it gave a slanted wall across a real doorway
+            # (00808, 2026-11-01). Then both ends go at the farther frame's distance, roughly the mirror's plane.
+            d_frame = {i: float(r[i]) for i in frame}
+            if len(frame) == 2 and max(d_frame.values()) > 1.35 * min(d_frame.values()):
+                d_frame = {i: max(d_frame.values()) for i in frame}
             ends = []
             for i, edge in ((lo - 1, lo), (hi + 1, hi)):
                 k = i if 0 <= i < len(b) else edge  # phantom runs off the image: guess the frame's distance
-                ends.append(pos + _rotate(fwd, np.array(b[k])) * (r[k] if k == i else d_edge))
+                ends.append(pos + _rotate(fwd, np.array(b[k])) * (d_frame[k] if k == i else max(d_frame.values())))
             a, c = ends
             u = (c - a) / max(np.linalg.norm(c - a), 1e-6)
-            self.map.add_segment(a - u * extend_m, c + u * extend_m, fwd)
-            added = True
-        return added
+            segs.append((a - u * extend_m, c + u * extend_m, fwd))
+        return segs
 
     # -- control ------------------------------------------------------------------------------------------
     def step(self, depth, pose, t, face_xz=None, rgb=None):
@@ -410,8 +443,14 @@ class ObjectSearchNavigator(MapNavigator):
         self._choose_goal(t, pos)
         if self.mode == "approach" and self._target is not None:
             d = float(np.linalg.norm(self._target.xz - pos))
+            if self._progress is None or self._progress[2] is not self._target or d < self._progress[0] - 0.5:
+                self._progress = (d, t, self._target)
+            elif t - self._progress[1] > self.approach_patience_s:
+                self._target.rejected = True  # unreachable on the current map: explore instead of pushing at it
+                self.events.append((t, "unreachable", self.label))
+                self._target, self.mode, self._progress = None, "explore", None
             blocked = self._last is not None and self._last[1] < 0.02 and t > self.look_around_s
-            if d < self.arrive_m or (d < self.arrive_blocked_m and blocked):
+            if self.mode == "approach" and (d < self.arrive_m or (d < self.arrive_blocked_m and blocked)):
                 self.mode = "verify"
                 self._verify = {"since": t, "looks": 0, "need_after": None}
                 self.events.append((t, "arrived", self.label))
@@ -425,11 +464,20 @@ class ObjectSearchNavigator(MapNavigator):
                 ang = np.arccos(np.clip(v_to @ fwd / (np.linalg.norm(v_to) * np.linalg.norm(fwd) + 1e-9), -1, 1))
                 if np.rad2deg(ang) < 12.0:
                     self._verify["need_after"] = t
+        creep = 0.0
+        if self.mode == "close_in":
+            v_to = self._target.xz - pos
+            if face_xz is None:  # (an outer controller's face request, e.g. a mirror check, takes precedence)
+                face_xz, creep = v_to, self.close_in_mps
         if self.mode in ("announce", "done", "gave_up") and face_xz is None:
             face_xz = fwd  # hold still
-        linear, angular, diag = super().step(depth, pose, t, face_xz=face_xz)
+        linear, angular, diag = super().step(depth, pose, t, face_xz=face_xz, creep_mps=creep)
         if self.mode in ("announce", "done", "gave_up", "verify"):
             linear = 0.0
+        if self.mode == "close_in" and (diag["depth_ahead_m"] < self.close_in_stop_m or diag["safety_level"] == "stop"
+                                        or t - self._close_since > self.close_in_s):
+            linear = 0.0
+            self._declare(t)
         diag.update({
             "mode": self.mode,
             "target_label": self.label,

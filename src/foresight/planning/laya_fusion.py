@@ -97,15 +97,19 @@ class ForesightNavigator:
     def __init__(self, laya: LayaClient, describer: BackgroundDescriber, navigator: MapNavigator,
                  questions: dict = MIRROR_QUESTIONS, hazard_question: str = "mirror", hazard_option: str = "A",
                  threshold: float = 0.6, banner_s: float = 3.0, align_deg: float = 8.0, verify_timeout_s: float = 8.0,
-                 in_path_only: bool = False):
+                 in_path_only: bool = False, pending_s: float = 10.0):
         """in_path_only: only double-check a flagged view if the robot's current route runs into it (within
         `path_m` ahead and `path_deg` of the view's centre); flags about views off the route are logged as
-        "off_path" and cost nothing — a reflection matters only where the robot is about to drive."""
+        "off_path" and cost nothing — a reflection matters only where the robot is about to drive. An off-path
+        flag stays pending for `pending_s`: if the route, or the robot's own heading, turns into that view in the
+        meantime, it is checked then ("late_flag"). Without that, a flag raised mid-turn (route not yet through
+        the view) was dropped and the robot drove into the mirror 1.2 s later (2026-10-30 evaluation)."""
         self.laya, self.describer, self.nav, self.questions = laya, describer, navigator, questions
         self.hazard_question, self.hazard_option = hazard_question, hazard_option
         self.threshold, self.banner_s = threshold, banner_s
         self.align_cos, self.verify_timeout_s = np.cos(np.deg2rad(align_deg)), verify_timeout_s
-        self.in_path_only = in_path_only
+        self.in_path_only, self.pending_s = in_path_only, pending_s
+        self._pending: list = []  # (seen, flagged at t) off-path flags that may still come into the way
         self._handled: set = set()
         self._resolved: list = []  # (pos, fwd) of views whose check ended without a new wall: don't re-check them
         self._verify: Optional[dict] = None
@@ -121,6 +125,13 @@ class ForesightNavigator:
             if 0.3 < d < path_m and v @ f > d * np.cos(np.deg2rad(path_deg)):
                 return True
         return False
+
+    def _heading_into(self, seen, pose, near_m: float = 2.0, within_deg: float = 25.0) -> bool:
+        pos, fwd = self.nav.scans[seen][:2]
+        here = np.asarray(pose["position"], float)[[0, 2]]
+        f = np.asarray(pose["forward_xz"], float)
+        cos = f @ fwd / (np.linalg.norm(f) * np.linalg.norm(fwd) + 1e-9)
+        return np.linalg.norm(here - pos) < near_m and cos > np.cos(np.deg2rad(within_deg))
 
     def _was_resolved(self, seen, near_m: float = 1.0, within_deg: float = 30.0) -> bool:
         if seen not in self.nav.scans:
@@ -155,9 +166,18 @@ class ForesightNavigator:
                 event = "known"  # already walled off, or already checked from about here: nothing new to check
             elif new_note and flagged and seen in self.nav.scans and self.in_path_only and not self._route_into(seen):
                 event = "off_path"
+                self._pending.append((seen, t))
             elif new_note and flagged and seen in self.nav.scans:
                 self._verify = {"seen": seen, "fwd": self.nav.scans[seen][1], "since": t, "aligned_at": None}
                 event = "flag"
+            if self._verify is None:
+                self._pending = [(s, t0) for s, t0 in self._pending if t - t0 < self.pending_s and s in self.nav.scans]
+                for s, t0 in self._pending:
+                    if s != seen and (self._route_into(s) or self._heading_into(s, pose)):
+                        self._pending.remove((s, t0))
+                        self._verify = {"seen": s, "fwd": self.nav.scans[s][1], "since": t, "aligned_at": None}
+                        event = event or "late_flag"
+                        break
         elif new_note and v["aligned_at"] is not None and seen >= v["aligned_at"]:  # the second look
             if flagged:
                 # The confirming view can be too close to show a gap (a mirror filling the whole view reads deep

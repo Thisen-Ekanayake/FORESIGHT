@@ -5,9 +5,11 @@ No map and no goal coordinates are given: each robot explores frontiers of its o
 monocular depth) while a background Qwen3-VL worker grounds the instruction's object names in the camera
 frame; sightings are fused on the map and an object becomes a goal after two looks agree
 (`foresight.planning.object_search`). Conditions share everything except reflection handling:
-  baseline   explorer + grounding + object memory
-  foresight  the same, plus Qwen3-VL scene notes read by Laya every tick; a reflection flagged twice becomes
-             a wall on the map (`laya_fusion.ForesightNavigator`), and objects seen through it are ignored.
+  baseline      explorer + grounding + object memory
+  foresight     (v1) the same, plus Qwen3-VL scene notes on every look, read by Laya every tick; a reflection flagged
+                twice becomes a wall on the map (`laya_fusion.ForesightNavigator`), objects seen through it are ignored.
+  foresight_fs  (v2, fast/slow) a yes/no mirror check + mirror box on every look; only a candidate reflection in the
+                robot's way triggers the scene note + Laya (`fast_slow.FastSlowMirrorGuard`).
 Every look runs on one worker (FORESIGHT's looks = description + grounding, so they are slower), and sim
 time advances by measured compute (`foresight.sim.timed_episode`).
 
@@ -20,6 +22,7 @@ import argparse
 import os
 
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")  # Qwen + depth + Laya + renderer fill the 8 GB GPU
+os.environ.setdefault("HF_HUB_OFFLINE", "1")  # models are local; HF HEAD requests over a slow link stalled start-up
 import json
 import math
 import pickle
@@ -43,10 +46,12 @@ EPISODES = {
                             mirror_xz=[[-0.07, -1.13], [-0.07, 1.33]],
                             place="HM3D 00808: a real home (Matterport scan) in Habitat-Sim. No map, no goal coordinates."),
 }
-EVAL_SET = Path("experiments/configs/object_search/episodes.json")
-if EVAL_SET.exists():
-    for _e in json.loads(EVAL_SET.read_text())["episodes"]:
-        EPISODES[_e["name"]] = dict({k: v for k, v in _e.items() if k != "name"}, dataset=HM3D)
+EVAL_SET = Path("experiments/configs/object_search/episodes.json")  # first set (seed 2026), 2026-10-30
+FRESH_SET = Path("experiments/configs/object_search/episodes_2027.json")  # second set (seed 2027), 2026-11-01
+for _set in (EVAL_SET, FRESH_SET):
+    if _set.exists():
+        for _e in json.loads(_set.read_text())["episodes"]:
+            EPISODES[_e["name"]] = dict({k: v for k, v in _e.items() if k != "name"}, dataset=HM3D)
 
 
 def episode(name):
@@ -160,15 +165,24 @@ def run(args, e, cond, out: Path):
         from foresight.planning.laya_fusion import ForesightNavigator
         laya = LayaClient(model=args.laya_model)
         laya.predict("warmup", {"q": {"type": "noul", "instructions": "warmup"}})
+        # foresight_fs describes a view only while checking a suspected reflection (FastSlowMirrorGuard.want_note)
+        worker_describe_when = []
+        when = (lambda: worker_describe_when[0]()) if cond == "foresight_fs" else None
         if oracle is not None:
-            worker = PerceptionWorker(locate, labels, describe=oracle.describe, min_latency_s=2.1 + args.oracle_latency_s)
+            worker = PerceptionWorker(locate, labels, describe=oracle.describe, extra_labels=["mirror"], describe_when=when,
+                                      min_latency_s=(0.4 if cond == "foresight_fs" else 2.1) + args.oracle_latency_s)
         else:
             worker = PerceptionWorker(locate, labels, describe=lambda rgb: vlm.describe(
                 rgb, prompt=REFLECTION_AWARE_PROMPT, max_new_tokens=args.vlm_tokens), direction=direction, present=present,
-                extra_labels=["mirror"])
+                extra_labels=["mirror"], describe_when=when)
         nav = ObjectSearchNavigator(worker=worker, poll_worker=False, **nav_kw)
         holder.append(nav)
-        ctl = ForesightNavigator(laya, worker, nav, threshold=args.threshold, verify_timeout_s=12.0, in_path_only=True)
+        if cond == "foresight_fs":
+            from foresight.planning.fast_slow import FastSlowMirrorGuard
+            ctl = FastSlowMirrorGuard(laya, worker, nav, threshold=args.threshold)
+            worker_describe_when.append(ctl.want_note)
+        else:
+            ctl = ForesightNavigator(laya, worker, nav, threshold=args.threshold, verify_timeout_s=12.0, in_path_only=True)
 
         def decide(rgb, d, bearing, t, pose):
             if oracle is not None:
@@ -186,7 +200,9 @@ def run(args, e, cond, out: Path):
     meta = {"condition": cond, "episode": e["name"], "instructions": e["instructions"], "oracle": bool(oracle),
             "wall_s": wall, "look_latency_s": worker.latencies_s, "look_jobs": worker.jobs,
             "tick_compute_ms_median": float(np.median([x["tick_compute_ms"] for x in ep.steps])),
-            "laya_infer_ms_median": (float(np.median([x["laya_infer_ms"] for x in ep.steps])) if cond == "foresight" else None)}
+            "laya_infer_ms_median": (float(np.median([x["laya_infer_ms"] for x in ep.steps if x.get("laya_called", True)] or [0.0]))
+                                     if cond != "baseline" else None),
+            "slow_looks": getattr(ctl, "n_slow_looks", None) if cond != "baseline" else None}
     (out / f"{cond}_meta.json").write_text(json.dumps(meta, indent=1))
     _summary(cond, ep, meta)
 
@@ -293,7 +309,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--phase", choices=["run", "eval", "assets", "render"], default="run")
     p.add_argument("--episodes", nargs="+", default=["mirror-sofa-bed"])
-    p.add_argument("--conditions", nargs="+", default=["baseline", "foresight"], choices=["baseline", "foresight"])
+    p.add_argument("--conditions", nargs="+", default=["baseline", "foresight"], choices=["baseline", "foresight", "foresight_fs"])
     p.add_argument("--out", default="results/runs/object_search/demo")
     p.add_argument("--oracle", action="store_true", help="harness: semantic-label grounding, no VLM for the baseline")
     p.add_argument("--oracle-latency-s", type=float, default=0.6, help="harness: simulated look latency")
@@ -316,6 +332,8 @@ def main():
     names = args.episodes
     if names == ["eval"]:
         names = [e["name"] for e in json.loads(EVAL_SET.read_text())["episodes"]] + ["mirror-sofa-bed"]
+    elif names == ["fresh"]:
+        names = [e["name"] for e in json.loads(FRESH_SET.read_text())["episodes"]] + ["mirror-sofa-bed"]
     if args.phase == "assets":
         for name in names:
             assets(args, episode(name), Path(args.out) / name)
