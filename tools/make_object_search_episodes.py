@@ -79,9 +79,9 @@ def main():
         for lab in ["tv", "refrigerator"]:
             eps.append(dict(name=f"00808-mirror-{lab}", scene="00808-y9hTuugGdiq", **MIRROR_START,
                             instructions=[lab], max_sim_s=180.0))
-    if fresh:  # names distinct from the first set's
+    if fresh:  # names distinct from the first set's (and from each other's: s2 = seed 2027, s3 = seed 2028, ...)
         for e in eps:
-            e["name"] = "s2-" + e["name"]
+            e["name"] = f"s{args.seed - 2025}-" + e["name"]
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"seed": args.seed, "note": "fixed before any evaluation run; do not edit by hand",
                                "episodes": eps}, indent=1))

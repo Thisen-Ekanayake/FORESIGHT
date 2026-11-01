@@ -30,6 +30,14 @@ from foresight.planning.laya_client import LayaClient
 from foresight.planning.laya_fusion import MIRROR_QUESTIONS
 
 
+def _seg_dist(p, a, b) -> float:
+    """Distance from point p to segment ab (2D)."""
+    p, a, b = (np.asarray(v, float) for v in (p, a, b))
+    ab = b - a
+    u = float(np.clip((p - a) @ ab / max(ab @ ab, 1e-9), 0.0, 1.0))
+    return float(np.linalg.norm(a + u * ab - p))
+
+
 def _cross(a, b, c, d) -> bool:
     """Whether segments ab and cd intersect (2D)."""
     def orient(p, q, r):
@@ -45,14 +53,27 @@ class FastSlowMirrorGuard:
     def __init__(self, laya: LayaClient, worker, navigator, questions: dict = MIRROR_QUESTIONS,
                  hazard_question: str = "mirror", hazard_option: str = "A", threshold: float = 0.6,
                  path_m: float = 5.0, ray_m: float = 2.5, keep_s: float = 15.0, verify_timeout_s: float = 14.0,
-                 align_deg: float = 8.0, banner_s: float = 3.0, same_m: float = 0.8):
+                 align_deg: float = 8.0, banner_s: float = 3.0, same_m: float = 0.4,
+                 wedge_p: float = 0.9, wedge_m: float = 3.0, wedge_pad_deg: float = 3.0):
+        """same_m: a candidate is already handled if it lies along an existing wall or a dismissed candidate (both ends
+        and its middle within same_m of it). wedge_*: a look with P(mirror) >= wedge_p also makes a "wedge" candidate
+        from each mirror box: the box's bearing span from that pose, out to wedge_m; it is in the way if the route
+        or heading enters it. On confirmation, a wedge without gap geometry is walled across its span at the nearest
+        depth read inside it (clamped 0.6-2.0 m).
+
+        v2.1 (2026-11-01), after the fresh-set evaluation of v2 (commit b38b4ed), whose two mirror crashes were both at
+        a 00808 closet mirror: (1) v2 called a candidate "known" if its midpoint was within 0.8 m of any wall's
+        midpoint, so an earlier wall at the wrong angle hid the real candidate; (2) Qwen boxed objects *inside* the
+        reflection (a TV, pictures), the region read about as near as its frame, so no gap-based candidate was made,
+        and the robot turned into the boxed mirror. Both found by replaying those looks offline."""
         self.laya, self.worker, self.nav, self.questions = laya, worker, navigator, questions
         self.hazard_question, self.hazard_option, self.threshold = hazard_question, hazard_option, threshold
         self.path_m, self.ray_m, self.keep_s, self.verify_timeout_s = path_m, ray_m, keep_s, verify_timeout_s
         self.align_cos, self.banner_s, self.same_m = np.cos(np.deg2rad(align_deg)), banner_s, same_m
+        self.wedge_p, self.wedge_m, self.wedge_pad = wedge_p, wedge_m, np.deg2rad(wedge_pad_deg)
         self._done_looks: set = set()
         self.candidates: list = []  # {"a", "b", "fwd", "seen", "t"} candidate walls not yet checked
-        self._dismissed: list = []  # midpoints of candidates the slow check rejected
+        self._dismissed: list = []  # (a, b) of candidates the slow check rejected
         self._verify: Optional[dict] = None
         self._wall_at = -np.inf
         self._p, self._note, self._note_seen = 0.0, None, None
@@ -69,16 +90,47 @@ class FastSlowMirrorGuard:
         return want
 
     # -- geometry -----------------------------------------------------------------------------------------------
-    def _known(self, mid) -> bool:
-        for a, b in self.nav.map.walls:
-            if np.linalg.norm((np.asarray(a) + np.asarray(b)) / 2 - mid) < self.same_m:
-                return True
-        if any(np.linalg.norm(m - mid) < self.same_m for m in self._dismissed):
-            return True
-        return any(np.linalg.norm((c["a"] + c["b"]) / 2 - mid) < self.same_m for c in self.candidates)
+    def _known(self, a, b) -> bool:
+        """Lies along an existing wall, a dismissed candidate, or a pending candidate."""
+        mid = (a + b) / 2
+        segs = [(np.asarray(w0), np.asarray(w1)) for w0, w1 in self.nav.map.walls] + list(self._dismissed) \
+            + [(c["a"], c["b"]) for c in self.candidates]
+        return any(max(_seg_dist(q, s0, s1) for q in (a, b, mid)) < self.same_m for s0, s1 in segs)
+
+    def _wedge(self, seen, box, p_mirror):
+        """A wedge candidate from one mirror box (or None): bearing span, origin pose, and its fallback wall."""
+        if p_mirror < self.wedge_p or seen not in self.nav.scans:
+            return None
+        pos, fwd, b, r = self.nav.scans[seen]
+        a1, a2 = (float(np.arctan((box[k] / 1000 - 0.5) * 2)) for k in (0, 2))  # 90 deg hfov: tan(45) = 1
+        inside = (b >= a1) & (b <= a2) & np.isfinite(r)
+        d = float(np.clip(np.min(r[inside]) if inside.any() else 1.0, 0.6, 2.0))
+        from foresight.planning.local_map import _rotate
+        ends = [pos + _rotate(fwd, np.array(x)) * d for x in (a1, a2)]
+        u = (ends[1] - ends[0]) / max(np.linalg.norm(ends[1] - ends[0]), 1e-6)
+        return {"kind": "wedge", "pos": pos, "fwd": fwd, "b1": a1 - self.wedge_pad, "b2": a2 + self.wedge_pad,
+                "a": ends[0] - u * 0.2, "b": ends[1] + u * 0.2, "seen": seen}
+
+    def _in_wedge(self, c, q) -> bool:
+        v = np.asarray(q, float) - c["pos"]
+        dist = float(np.linalg.norm(v))
+        if not 0.3 < dist < self.wedge_m:
+            return False
+        f = c["fwd"] / np.linalg.norm(c["fwd"])
+        bearing = float(np.arctan2(v @ np.array([-f[1], f[0]]), v @ f))
+        return c["b1"] <= bearing <= c["b2"]
 
     def _in_way(self, c, pos, fwd) -> bool:
         a, b = c["a"], c["b"]
+        if c.get("kind") == "wedge":
+            ray = [pos + fwd / np.linalg.norm(fwd) * x for x in np.arange(0.2, 2.0, 0.2)]
+            path, run, pts = [pos] + [np.asarray(p, float) for p in self.nav.last_path], 0.0, []
+            for p, q in zip(path[:-1], path[1:]):
+                pts += [p + (q - p) * x for x in np.linspace(0, 1, 4)]
+                run += float(np.linalg.norm(q - p))
+                if run > self.path_m:
+                    break
+            return any(self._in_wedge(c, q) for q in ray + pts)
         if _cross(pos, pos + fwd / np.linalg.norm(fwd) * self.ray_m, a, b):
             return True
         path = [pos] + [np.asarray(p, float) for p in self.nav.last_path]
@@ -117,14 +169,20 @@ class FastSlowMirrorGuard:
                         self.nav.map.add_segment(c["a"], c["b"], c["fwd"])
                     wall_added, self._wall_at, event = True, t, "confirmed"
                 else:
-                    self._dismissed += [(c["a"] + c["b"]) / 2 for c in v["cands"]]
+                    self._dismissed += [(c["a"], c["b"]) for c in v["cands"]]
                     event = "dismissed"
                 self.events.append((t, event, seen, self._p))
                 self._verify = None
                 continue
-            for a, b, f in self.nav.reflection_segments(seen):  # fast path: a candidate wall from this look
-                if not self._known((a + b) / 2):
+            segs = self.nav.reflection_segments(seen)  # fast path: candidate walls from this look
+            for a, b, f in segs:
+                if not self._known(a, b):
                     self.candidates.append({"a": a, "b": b, "fwd": f, "seen": seen, "t": t})
+            if not segs:  # no gap geometry: a confident mirror box still marks where not to drive
+                for box in res.get("boxes", {}).get("mirror", []):
+                    c = self._wedge(seen, box, res.get("present", {}).get("mirror", 0.0))
+                    if c is not None and not self._known(c["a"], c["b"]):
+                        self.candidates.append(dict(c, t=t))
         self.candidates = [c for c in self.candidates if t - c["t"] < self.keep_s]
         if self._verify is None and event is None:  # (one event per tick: a fresh check starts next tick)
             hits = [c for c in self.candidates if self._in_way(c, pos, fwd)]
@@ -137,7 +195,7 @@ class FastSlowMirrorGuard:
                 self.events.append((t, event, c0["seen"], None))
         elif self._verify is not None and t - self._verify["since"] > self.verify_timeout_s:
             # No usable look in time: stop holding the robot and don't raise these candidates again.
-            self._dismissed += [(c["a"] + c["b"]) / 2 for c in self._verify["cands"]]
+            self._dismissed += [(c["a"], c["b"]) for c in self._verify["cands"]]
             event, self._verify = "timeout", None
             self.events.append((t, event, None, None))
         v = self._verify

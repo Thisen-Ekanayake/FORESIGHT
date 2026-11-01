@@ -48,7 +48,8 @@ EPISODES = {
 }
 EVAL_SET = Path("experiments/configs/object_search/episodes.json")  # first set (seed 2026), 2026-10-30
 FRESH_SET = Path("experiments/configs/object_search/episodes_2027.json")  # second set (seed 2027), 2026-11-01
-for _set in (EVAL_SET, FRESH_SET):
+SET3 = Path("experiments/configs/object_search/episodes_2028.json")  # third set (seed 2028), for v2.1, 2026-11-01
+for _set in (EVAL_SET, FRESH_SET, SET3):
     if _set.exists():
         for _e in json.loads(_set.read_text())["episodes"]:
             EPISODES[_e["name"]] = dict({k: v for k, v in _e.items() if k != "name"}, dataset=HM3D)
@@ -307,7 +308,7 @@ def evaluate(args, names):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--phase", choices=["run", "eval", "assets", "render"], default="run")
+    p.add_argument("--phase", choices=["run", "eval", "assets", "render", "render_v2"], default="run")
     p.add_argument("--episodes", nargs="+", default=["mirror-sofa-bed"])
     p.add_argument("--conditions", nargs="+", default=["baseline", "foresight"], choices=["baseline", "foresight", "foresight_fs"])
     p.add_argument("--out", default="results/runs/object_search/demo")
@@ -322,6 +323,10 @@ def main():
     p.add_argument("--vlm-tokens", type=int, default=96)
     p.add_argument("--eval", default="results/runs/object_search/eval/eval.json", help="render: scoreboard source")
     p.add_argument("--video", default=None)
+    p.add_argument("--old-eval", default="results/runs/object_search/eval/eval.json",
+                   help="render_v2: the first set's eval.json (baseline vs v1), for the recap")
+    p.add_argument("--isaac-dir", default=None, help="render_v2: tools/isaac/render_replay.py output for the Isaac segment")
+    p.add_argument("--isaac-run", default=None, help="render_v2: the run JSON that replay was made from")
     p.add_argument("--tts-python", default="/ml/HelaBERT_Analysis/.venv/bin/python")
     p.add_argument("--kokoro-home", default="/ml/Models/kokoro/hf")
     p.add_argument("--voice", default="af_heart")
@@ -334,6 +339,8 @@ def main():
         names = [e["name"] for e in json.loads(EVAL_SET.read_text())["episodes"]] + ["mirror-sofa-bed"]
     elif names == ["fresh"]:
         names = [e["name"] for e in json.loads(FRESH_SET.read_text())["episodes"]] + ["mirror-sofa-bed"]
+    elif names == ["set3"]:
+        names = [e["name"] for e in json.loads(SET3.read_text())["episodes"]] + ["mirror-sofa-bed"]
     if args.phase == "assets":
         for name in names:
             assets(args, episode(name), Path(args.out) / name)
@@ -344,6 +351,15 @@ def main():
         n_scenes = len({EPISODES[r["episode"]]["scene"] for r in rows if r["episode"] in EPISODES})
         render_video(Path(args.out), e, rows, n_scenes, Path(args.video or Path(args.out) / "foresight_object_search.mp4"),
                      args.tts_python, args.kokoro_home, args.voice)
+    elif args.phase == "render_v2":
+        from foresight.viz.object_search_v2_video import render_video as render_v2
+        e = episode(names[0])
+        rows = json.loads(Path(args.eval).read_text())
+        old_rows = json.loads(Path(args.old_eval).read_text())
+        n_scenes = len({EPISODES[r["episode"]]["scene"] for r in rows if r["episode"] in EPISODES})
+        render_v2(Path(args.out), e, rows, old_rows, n_scenes, Path(args.video or Path(args.out) / "foresight_v2_object_search.mp4"),
+                  args.tts_python, args.kokoro_home, args.voice, isaac_dir=args.isaac_dir and Path(args.isaac_dir),
+                  isaac_run=args.isaac_run and Path(args.isaac_run), old_root=Path(args.old_eval).parent)
     elif args.phase == "run":
         for name in names:
             out = Path(args.out) / name
