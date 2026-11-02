@@ -175,6 +175,14 @@ gx.AddTranslateOp().Set(Gf.Vec3d(float((lo[0] + hi[0]) / 2), float((lo[1] + hi[1
 gx.AddScaleOp().Set(Gf.Vec3f(60.0, 60.0, 0.1))
 UsdPhysics.CollisionAPI.Apply(ground.GetPrim())
 ground.CreateVisibilityAttr("invisible")
+# The Go2 walking policy was trained on friction 1.0 / restitution 0 (NVIDIA's go2_example sets this "to match training
+# configuration"); PhysX's default 0.5 made the feet slip outward: a low, splayed, crab-like gait.
+ground_mat = UsdShade.Material.Define(stage, "/World/Looks/GroundPhysics")
+_pm = UsdPhysics.MaterialAPI.Apply(ground_mat.GetPrim())
+_pm.CreateStaticFrictionAttr().Set(1.0)
+_pm.CreateDynamicFrictionAttr().Set(1.0)
+_pm.CreateRestitutionAttr().Set(0.0)
+UsdShade.MaterialBindingAPI.Apply(ground.GetPrim()).Bind(ground_mat, UsdShade.Tokens.weakerThanDescendants, "physics")
 if args.save_usd:
     stage.GetRootLayer().Export(args.save_usd)
 
