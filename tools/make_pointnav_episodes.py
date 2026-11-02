@@ -10,7 +10,10 @@ Written once and committed before any run on them (as for object search). Two se
      stratum need these.
 
 Episodes: start and goal navigable on the same floor (|dy| < 0.25 m), geodesic 3-12 m, geodesic/euclidean >= 1.05,
-random start yaw; time budget 30 s + 3x the geodesic at 0.35 m/s.
+start and goal at least --min-clearance m from the navmesh edge, random start yaw; time budget 30 s + 3x the geodesic
+at 0.35 m/s. The clearance rule came after the pilot on the first sets (A seed 3001, S seed 3002, now dev sets): with
+ground-truth depth, starts ~0.1-0.2 m from a wall left the robot facing it for the whole episode, and starts on a
+wall-hugging navmesh edge "crashed" before moving.
 
   python tools/make_pointnav_episodes.py --set A --seed 3001
   python tools/make_pointnav_episodes.py --set S --seed 3002
@@ -61,7 +64,7 @@ def make_sim(dataset, scene, semantic=False, res=160):
     return habitat_sim.Simulator(habitat_sim.Configuration(cfg, [agent]))
 
 
-def sample(sim, rng, n_want, max_tries=4000):
+def sample(sim, rng, n_want, max_tries=6000, min_clearance=0.0):
     pf = sim.pathfinder
     out = []
     for _ in range(max_tries):
@@ -69,6 +72,8 @@ def sample(sim, rng, n_want, max_tries=4000):
             break
         a, b = pf.get_random_navigable_point(), pf.get_random_navigable_point()
         if abs(a[1] - b[1]) > 0.25:
+            continue
+        if min_clearance > 0 and min(pf.distance_to_closest_obstacle(a, 2.0), pf.distance_to_closest_obstacle(b, 2.0)) < min_clearance:
             continue
         path = habitat_sim.ShortestPath()
         path.requested_start, path.requested_end = a, b
@@ -111,6 +116,7 @@ def main():
     p.add_argument("--seed", type=int, required=True)
     p.add_argument("--per-scene", type=int, default=None, help="A: 12, S: 16")
     p.add_argument("--candidates", type=int, default=80, help="S: candidates per home before stratifying")
+    p.add_argument("--min-clearance", type=float, default=0.3, help="start/goal distance to the navmesh edge, m")
     args = p.parse_args()
     from foresight.perception.depth.sources import REFLECTIVE_CATEGORIES, reflective_ids
 
@@ -127,9 +133,9 @@ def main():
         try:
             sim.pathfinder.seed(int(rng.integers(1 << 31)))
             if args.set == "A":
-                eps = sample(sim, rng, n)
+                eps = sample(sim, rng, n, min_clearance=args.min_clearance)
             else:
-                cands = sample(sim, rng, args.candidates)
+                cands = sample(sim, rng, args.candidates, min_clearance=args.min_clearance)
                 ids = reflective_ids(sim)
                 for c in cands:
                     c["reflective_mean"], c["reflective_max"] = (round(x, 4) for x in exposure(sim, c, ids))
@@ -156,7 +162,7 @@ def main():
     out = OUT / f"episodes_{args.set}_{args.seed}.json"
     meta = {"set": args.set, "seed": args.seed, "dataset": str(dataset), "n": len(episodes),
             "reflective_categories": list(REFLECTIVE_CATEGORIES) if args.set == "S" else None,
-            "rules": "same floor |dy|<0.25 m, geodesic 3-12 m, geodesic/euclid >= 1.05, random yaw; "
+            "rules": f"same floor |dy|<0.25 m, geodesic 3-12 m, geodesic/euclid >= 1.05, clearance >= {args.min_clearance} m, random yaw; "
                      "max_sim_s = 30 + 3 * geodesic / 0.35",
             "episodes": episodes}
     out.write_text(json.dumps(meta, indent=1))

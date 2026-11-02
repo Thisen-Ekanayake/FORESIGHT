@@ -38,7 +38,10 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-SETS = {"A": "experiments/configs/pointnav/episodes_A_3001.json", "S": "experiments/configs/pointnav/episodes_S_3002.json"}
+# Evaluation sets (drawn with the clearance rule, committed before any run) and the first draws, kept as dev sets for
+# developing/tuning: the pilot and any fix found on it run there, never on A/S.
+SETS = {"A": "experiments/configs/pointnav/episodes_A_3003.json", "S": "experiments/configs/pointnav/episodes_S_3004.json",
+        "A_dev": "experiments/configs/pointnav/episodes_A_3001.json", "S_dev": "experiments/configs/pointnav/episodes_S_3002.json"}
 _MODELS = {}
 
 
@@ -108,7 +111,7 @@ def build(cond, e, args, start_xz, goal_xz):
     center = (start_xz + goal_xz) / 2
     size = float(max(16.0, 2 * np.linalg.norm(goal_xz - start_xz) + 12.0))
     nav_kw = dict(goal_xz=goal_xz, map_center_xz=center, map_size_m=size, max_linear_mps=v, max_angular_radps=w,
-                  safety=safety(), floor_scale=not args.no_floor_scale)
+                  safety=safety(), floor_scale=not args.no_floor_scale, escape=True)
     if cond == "map":
         nav = MapNavigator(**nav_kw)
 
@@ -137,7 +140,7 @@ def build(cond, e, args, start_xz, goal_xz):
     raise ValueError(cond)
 
 
-_KEEP = ("depth_scale", "depth_ahead_m", "safety_level", "min_clearance_m", "looking_around", "background_ms",
+_KEEP = ("depth_scale", "depth_ahead_m", "safety_level", "min_clearance_m", "looking_around", "escaping", "background_ms",
          "p_hazard", "verifying", "event", "wall_added", "laya_called", "laya_infer_ms", "vlm_progress")
 
 
@@ -152,8 +155,8 @@ def run_one(args, e, cond, depth_spec, out_json: Path):
     from make_pointnav_episodes import ALL10, ANNOTATED, scene_ref
     import habitat_sim
 
-    dataset = ANNOTATED if args.set == "S" else ALL10
-    semantic = args.set == "S"  # annotated homes: log reflective share; reflective-masked sources need it
+    dataset = ANNOTATED if args.set.startswith("S") else ALL10
+    semantic = args.set.startswith("S")  # annotated homes: log reflective share; reflective-masked sources need it
     if needs_semantic(depth_spec) and not semantic:
         raise ValueError(f"{depth_spec} needs the annotated set S")
     est = model("depth") if "da" in re.split(r"[:@=,]", depth_spec) else None
