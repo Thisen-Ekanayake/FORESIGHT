@@ -3,7 +3,24 @@
 Notable changes to FORESIGHT, newest first. Day-by-day working notes live in `logs/` (untracked);
 milestone status in `PROGRESS.md`.
 
-## [Unreleased] — FORESIGHT v2 / v2.1 and the Isaac Sim replay (2026-11-01)
+## [Unreleased] — Literature review and next-phase plan (2026-11-02)
+
+### Added
+- `PLAN.md`: next phase, closing the spec's deliverables A → C → B on point-goal; revised after the lit review.
+- `docs/lit_review/`: six Athena research maps (VLN, zero-shot ObjectNav, monocular metric depth, mirror/glass/
+  transparent perception, embodied-navigation robustness, dual-system VLAs). Field evolution, open-problem themes,
+  closest prior work (Athena + web), positioning of each contribution; Athena's milestone and reading-path exports.
+
+### Changed (plan)
+- Deliverable A sharpened into hypothesis H-A (uniform vs structured depth error), with NavTrust's depth corruptions
+  added for comparability. Deliverable C narrowed to mirror/glass and textureless as primary axes (low light and
+  motion blur are already covered by RobustNav/NavTrust). B framed against Slow Brain/Fast Planner, AsyncVLA and
+  TIC-VLA.
+
+### Fixed
+- Isaac replay: ground physics material (friction 1.0, restitution 0) to match the Go2 walking policy's training.
+
+## FORESIGHT v2 / v2.1 and the Isaac Sim replay (2026-11-01)
 
 ### Added
 - `planning/fast_slow.py` `FastSlowMirrorGuard` (FORESIGHT v2): yes/no mirror check + mirror box every look; the slow

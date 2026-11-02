@@ -1,0 +1,16 @@
+# Reading path: Zero-Shot Object Goal Navigation
+
+12 papers: a survey first, then the milestones in the order they appeared. From Athena's map built 2026-11-01.
+
+1. **[A Survey of Object Goal Navigation](https://doi.org/10.1109/tase.2024.3378010)** (2024). Jingwen Sun, Jing Wu, Ze Ji et al. *IEEE Transactions on Automation Science and Engineering*. *(start here)*
+2. **[Visual Representations for Semantic Target Driven Navigation](https://arxiv.org/abs/1805.06066)** (2018). Arsalan Mousavian, Alexander Toshev, Marek Fišer et al. *Proceedings - IEEE International Conference on Robotics and Automation/Proceedings*.
+3. **[Object Goal Navigation using Goal-Oriented Semantic Exploration](https://arxiv.org/abs/2007.00643)** (2020). Devendra Singh Chaplot, Dhiraj Gandhi, Abhinav Gupta et al. *arXiv (Cornell University)*.
+4. **[ObjectNav Revisited: On Evaluation of Embodied Agents Navigating to Objects](https://arxiv.org/abs/2006.13171)** (2020). Dhruv Batra, Aaron Gokaslan, Aniruddha Kembhavi et al. *arXiv (Cornell University)*.
+5. **[ZSON: Zero-Shot Object-Goal Navigation Using Multimodal Goal Embeddings](https://arxiv.org/abs/2206.12403)** (2022). Arjun Majumdar, Gunjan Aggarwal, Bhavika Devnani et al. *neural information processing systems*.
+6. **[CoWs on Pasture: Baselines and Benchmarks for Language-Driven Zero-Shot Object Navigation](https://arxiv.org/abs/2203.10421)** (2022). Samir Yitzhak Gadre, Mitchell Wortsman, Gabriel Ilharco et al. *IEEE Computer Society Conference on Computer Vision and Pattern Recognition/Proceedings - IEEE Computer Society Conference on Computer Vision and Pattern Recognition/Proceedings*.
+7. **[PONI: Potential Functions for ObjectGoal Navigation with Interaction-free Learning](https://arxiv.org/abs/2201.10029)** (2022). Santhosh Kumar Ramakrishnan, Devendra Singh Chaplot, Ziad Al-Halah et al. *IEEE Computer Society Conference on Computer Vision and Pattern Recognition/Proceedings - IEEE Computer Society Conference on Computer Vision and Pattern Recognition/Proceedings*.
+8. **[VLFM: Vision-Language Frontier Maps for Zero-Shot Semantic Navigation](https://arxiv.org/abs/2312.03275)** (2023). Naoki Yokoyama, Sehoon Ha, Dhruv Batra et al. *Proceedings - IEEE International Conference on Robotics and Automation/Proceedings*.
+9. **[ESC: Exploration with Soft Commonsense Constraints for Zero-shot Object Navigation](https://arxiv.org/abs/2301.13166)** (2023). Kaiwen Zhou, Kaizhi Zheng, Connor Pryor et al. *arXiv (Cornell University)*.
+10. **[Can an Embodied Agent Find Your “Cat-shaped Mug”? LLM-Based Zero-Shot Object Navigation](https://arxiv.org/abs/2303.03480)** (LGX) (2023). Vishnu Sashank Dorbala, James F. Mullen, Dinesh Manocha. *IEEE Robotics and Automation Letters*.
+11. **[SG-Nav: Online 3D Scene Graph Prompting for LLM-based Zero-shot Object Navigation](https://arxiv.org/abs/2410.08189)** (2024). Hang Yin, Xiuwei Xu, Zhenyu Wu et al. *neural information processing systems*.
+12. **[ApexNAV: An Adaptive Exploration Strategy for Zero-Shot Object Navigation With Target-Centric Semantic Fusion](https://arxiv.org/abs/2504.14478)** (ApexNav) (2025). Mingjie Zhang, Yuheng Du, Chengkai Wu et al. *IEEE Robotics and Automation Letters*.

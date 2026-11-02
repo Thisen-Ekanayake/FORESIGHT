@@ -1,0 +1,26 @@
+# Reading path: Vision-and-Language Navigation
+
+12 papers: a survey first, then the milestones in the order they appeared. From Athena's map built 2026-11-01.
+
+1. **[Vision-and-Language Navigation Today and Tomorrow: A Survey in the Era of Foundation Models](https://arxiv.org/abs/2407.07035)** (2024). Zhang, Yue, Ziqiao Ma, Li, Jialu et al. *arXiv (Cornell University)*. *(start here)*
+   This survey reviews VLN methods and future opportunities using foundation models, offering newcomers a structured overview of the field's current state and challenges.
+2. **[Vision-and-Language Navigation: Interpreting Visually-Grounded Navigation Instructions in Real Environments](https://arxiv.org/abs/1711.07280)** (R2R) (2017). Peter Anderson, Qi Wu, Damien Teney et al. *IEEE Computer Society Conference on Computer Vision and Pattern Recognition/Proceedings - IEEE Computer Society Conference on Computer Vision and Pattern Recognition/Proceedings*.
+   This paper introduced the Matter-port3D Simulator and the Room-to-Room dataset to enable and benchmark visually-grounded natural language navigation in real environments.
+3. **[Speaker-Follower Models for Vision-and-Language Navigation](https://arxiv.org/abs/1806.02724)** (2018). Daniel Fried, Ronghang Hu, Volkan Cirik et al. *arXiv (Cornell University)*.
+   This paper introduced an embedded speaker model for data augmentation and pragmatic reasoning to improve navigation success rates.
+4. **[Reinforced Cross-Modal Matching and Self-Supervised Imitation Learning for Vision-Language Navigation](https://arxiv.org/abs/1811.10092)** (2018). Xin Eric Wang, Qiuyuan Huang, Aslı Çelikyılmaz et al. *IEEE Computer Society Conference on Computer Vision and Pattern Recognition/Proceedings - IEEE Computer Society Conference on Computer Vision and Pattern Recognition/Proceedings*.
+   This paper introduced reinforced cross-modal matching and self-supervised imitation learning to address grounding, feedback, and generalization challenges in vision-language navigation.
+5. **[On Evaluation of Embodied Navigation Agents](https://arxiv.org/abs/1807.06757)** (SPL) (2018). Peter Anderson, Chang, Angel, Devendra Singh Chaplot et al. *arXiv (Cornell University)*.
+6. **[Room-Across-Room: Multilingual Vision-and-Language Navigation with Dense Spatiotemporal Grounding](https://arxiv.org/abs/2010.07954)** (RxR) (2020). Alexander Ku, Peter Anderson, Roma Patel et al. *Conference on Empirical Methods in Natural Language Processing (EMNLP)*.
+   This paper introduced a larger, multilingual VLN dataset with dense spatiotemporal grounding to address path biases and expand research frontiers.
+7. **[VLN↻BERT: A Recurrent Vision-and-Language BERT for Navigation](https://arxiv.org/abs/2011.13922)** (2020). Yicong Hong, Qi Wu, Yuankai Qi et al. *IEEE Computer Society Conference on Computer Vision and Pattern Recognition/Proceedings - IEEE Computer Society Conference on Computer Vision and Pattern Recognition/Proceedings*.
+   This paper introduced a recurrent BERT model that maintains cross-modal state information to address the difficulty of adapting BERT to the partially observable nature of navigation tasks.
+8. **[Airbert: In-domain Pretraining for Vision-and-Language Navigation](https://arxiv.org/abs/2108.09105)** (2021). Pierre-Louis Guhur, Makarand Tapaswi, Shizhe Chen et al. *IEEE/CVF International Conference on Computer Vision (ICCV)*.
+   This paper introduces a large-scale in-domain dataset and pretraining strategy to improve generalization in vision-and-language navigation, addressing limitations of generic datasets and small-scale environments.
+9. **[Think Global, Act Local: Dual-scale Graph Transformer for Vision-and-Language Navigation](https://arxiv.org/abs/2202.11742)** (DUET) (2022). Shizhe Chen, Pierre-Louis Guhur, Makarand Tapaswi et al. *IEEE Computer Society Conference on Computer Vision and Pattern Recognition/Proceedings - IEEE Computer Society Conference on Computer Vision and Pattern Recognition/Proceedings*.
+   This paper introduces a dual-scale graph transformer that builds a topological map to balance global action planning with fine-grained visual grounding for navigation.
+10. **[NavGPT: Explicit Reasoning in Vision-and-Language Navigation with Large Language Models](https://arxiv.org/abs/2305.16986)** (2023). Gengze Zhou, Yicong Hong, Qi Wu. *Proceedings of the AAAI Conference on Artificial Intelligence*.
+11. **[NaVid: Video-based VLM Plans the Next Step for Vision-and-Language Navigation](https://arxiv.org/abs/2402.15852)** (2024). Jiazhao Zhang, Kunyu Wang, Rongtao Xu et al. *Robotics: Science and Systems*.
+   This paper introduces a video-based VLM that plans the next step using only monocular RGB video, eliminating the need for maps, odometers, or depth inputs to improve generalization.
+12. **[StreamVLN: Streaming Vision-and-Language Navigation via SlowFast Context Modeling](https://arxiv.org/abs/2507.05240)** (2025). Meng Wei, Chenyang Wan, Xiqian Yu et al. *Proceedings - IEEE International Conference on Robotics and Automation/Proceedings*.
+   StreamVLN introduces a slow-fast context modeling strategy to balance fine-grained visual understanding with long-term memory and low latency in real-world navigation.

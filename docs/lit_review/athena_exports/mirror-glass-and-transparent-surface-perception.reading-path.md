@@ -1,0 +1,16 @@
+# Reading path: Mirror, Glass and Transparent Surface Perception
+
+12 papers: a survey first, then the milestones in the order they appeared. From Athena's map built 2026-11-01.
+
+1. **[Non-invasive 3D reconstruction techniques for transparent objects: A systematic review](https://doi.org/10.1007/s10489-026-07418-4)** (2026). Xinyang Cai, Hedan Liu, Yiwen Qi et al. *Applied Intelligence*. *(start here)*
+2. **[Finding Glass](https://doi.org/10.1109/cvpr.2005.161)** (2005). Kenton G. McHenry, Jean Ponce, David Alexander Forsyth. *IEEE Computer Society Conference on Computer Vision and Pattern Recognition/Proceedings - IEEE Computer Society Conference on Computer Vision and Pattern Recognition/Proceedings*.
+3. **[Tomographic reconstruction of transparent objects](https://doi.org/10.1145/1179849.1179918)** (2006). Borislav Trifonov, Derek Bradley, Wolfgang Heidrich. *ACM SIGGRAPH Conference (SIGGRAPH)*.
+4. **[A Theory of Refractive and Specular 3D Shape by Light-Path Triangulation](https://doi.org/10.1007/s11263-007-0049-9)** (2007). Kiriakos N. Kutulakos, Eron Steger. *International Journal of Computer Vision*.
+5. **[3D Reconstruction of Transparent Objects with Position-Normal Consistency](https://doi.org/10.1109/cvpr.2016.473)** (2016). Yiming Qian, Minglun Gong, Yee‐Hong Yang. *IEEE Computer Society Conference on Computer Vision and Pattern Recognition/Proceedings - IEEE Computer Society Conference on Computer Vision and Pattern Recognition/Proceedings*.
+6. **[Clear Grasp: 3D Shape Estimation of Transparent Objects for Manipulation](https://arxiv.org/abs/1910.02550)** (ClearGrasp) (2019). Shreeyak S. Sajjan, Matthew Moore, Mike Chen Pan et al. *Proceedings - IEEE International Conference on Robotics and Automation/Proceedings*.
+7. **[Segmenting Transparent Objects in the Wild](https://arxiv.org/abs/2003.13948)** (TransLab) (2020). Enze Xie, Wenjia Wang, Wenhai Wang et al. *Lecture notes in computer science*.
+8. **[RGB-D Local Implicit Function for Depth Completion of Transparent Objects](https://arxiv.org/abs/2104.00622)** (2021). Luyang Zhu, Arsalan Mousavian, Xiang Yu et al. *IEEE Computer Society Conference on Computer Vision and Pattern Recognition/Proceedings - IEEE Computer Society Conference on Computer Vision and Pattern Recognition/Proceedings*.
+9. **[Learning Semantic Associations for Mirror Detection](https://doi.org/10.1109/cvpr52688.2022.00585)** (SANet) (2022). Huankang Guan, Jiaying Lin, Rynson W. H. Lau. *IEEE Computer Society Conference on Computer Vision and Pattern Recognition/Proceedings - IEEE Computer Society Conference on Computer Vision and Pattern Recognition/Proceedings*.
+10. **[FDCT: Fast Depth Completion for Transparent Objects](https://arxiv.org/abs/2307.12274)** (2023). T. Li, Zhehan Chen, Huan Liu et al. *IEEE Robotics and Automation Letters*.
+11. **[TCRNet: Transparent Object Depth Completion With Cascade Refinements](https://doi.org/10.1109/tase.2024.3371583)** (2024). Di‐Hua Zhai, Sheng Wu Yu, Wei Wang et al. *IEEE Transactions on Automation Science and Engineering*.
+12. **[CAGT: Sim-to-Real Depth Completion With Interactive Embedding Aggregation and Geometry Awareness for Transparent Objects](https://doi.org/10.1109/tcsvt.2025.3543288)** (2025). Xingshuo Jing, Kun Qian, Markus Vincze. *IEEE Transactions on Circuits and Systems for Video Technology*.
