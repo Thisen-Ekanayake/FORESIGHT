@@ -29,7 +29,7 @@ from typing import Callable, List, Optional
 import numpy as np
 
 from foresight.planning.laya_fusion import BackgroundDescriber
-from foresight.planning.local_map import _rotate, cost_grid, distances_from, frontiers
+from foresight.planning.local_map import cost_grid, distances_from, frontiers
 from foresight.planning.map_navigator import MapNavigator
 from foresight.safety.reactive import ReactiveSafetyLayer
 
@@ -179,9 +179,9 @@ class ObjectSearchNavigator(MapNavigator):
         kw.setdefault("safety", ReactiveSafetyLayer(stop_distance_m=0.4, slow_distance_m=0.8, clearance_quantile=0.02))
         # Plan through space the robot has seen: with a 90 deg camera, walls beside it are often still unmapped.
         kw.setdefault("plan_kw", {"unknown_cost": 3.0})
-        super().__init__(goal_xz=start_xz, map_center_xz=start_xz, map_size_m=map_size_m, **kw)
+        super().__init__(goal_xz=start_xz, map_center_xz=start_xz, map_size_m=map_size_m, worker=worker, **kw)
         self.instructions, self.k = list(instructions), 0
-        self.worker, self.poll_worker = worker, poll_worker
+        self.poll_worker = poll_worker
         self.memory = ObjectMemory()
         self.arrive_m, self.arrive_blocked_m = arrive_m, arrive_blocked_m
         self.frontier_every_s, self.verify_looks, self.announce_s = frontier_every_s, verify_looks, announce_s
@@ -231,14 +231,6 @@ class ObjectSearchNavigator(MapNavigator):
     def label(self):
         return self.instructions[self.k] if self.k < len(self.instructions) else None
 
-    def through_wall(self, a_xz, b_xz) -> bool:
-        if not self.map.walls:
-            return False
-        a, b = np.asarray(a_xz, float), np.asarray(b_xz, float)
-        n = max(int(np.linalg.norm(b - a) / (self.map.res / 2)), 2)
-        pts = a[None, :] + (b - a)[None, :] * np.linspace(0.05, 0.95, n)[:, None]
-        return bool(self.map.virtual[self.map.cell(pts)].any())
-
     # -- perception -----------------------------------------------------------------------------------
     def _consume(self, t):
         while self.worker.inbox:
@@ -250,7 +242,7 @@ class ObjectSearchNavigator(MapNavigator):
             if seen not in self._depths:
                 continue
             depth, pos, fwd = self._depths[seen]
-            depth = depth * self.scale.value
+            depth = depth * (self.scale.value if self.use_floor_scale else 1.0)
             if res.get("direction") is not None and res["direction"][0] == self.label:
                 if self._value_label != self.label:  # a new target: the old prior says nothing about it
                     self.value[:], self._value_n[:], self._value_label = 1.0, 0.0, self.label
@@ -382,55 +374,6 @@ class ObjectSearchNavigator(MapNavigator):
         for a, c, fwd in segs:
             self.map.add_segment(a, c, fwd)
         return bool(segs)
-
-    def reflection_segments(self, seen_t: float, min_gap_ratio: float = 1.3, far_m: float = 4.0,
-                            extend_m: float = 0.25, hfov_deg: float = 90.0) -> list:
-        """Wall off a confirmed reflection where Qwen boxed the mirror in that view (not across the whole view: a
-        note can be about something off to the side). Per mirror box: the scan bearings inside the box seed a
-        "phantom" region, grown sideways while the scan stays about as deep; the first shallower hits on either
-        side are the real surfaces framing the mirror, and the wall joins them (so it lies roughly on the mirror's
-        plane and leaves no gap at its ends). Only if the phantom reads `min_gap_ratio` x deeper than its frame.
-        No mirror box, or no gap -> no wall. -> [(a_xz, b_xz, view fwd)]."""
-        res = self.worker.results.get(seen_t)
-        if res is None or seen_t not in self.scans:
-            return []
-        pos, fwd, b, r = self.scans[seen_t]
-        r = np.where(np.isfinite(r), r, far_m)
-        tan_h = np.tan(np.deg2rad(hfov_deg) / 2)
-        segs = []
-        for box in res["boxes"].get("mirror", []):
-            a1, a2 = (np.arctan((box[k] / 1000 - 0.5) * 2 * tan_h) for k in (0, 2))
-            span = a2 - a1
-            inner = np.nonzero((b > a1 + 0.1 * span) & (b < a2 - 0.1 * span))[0]
-            if span < np.deg2rad(6) or inner.size == 0:
-                continue
-            d_in = float(np.median(r[inner]))
-            deep = r > d_in / min_gap_ratio
-            lo, hi = int(inner.min()), int(inner.max())
-            while lo > 0 and deep[lo - 1]:
-                lo -= 1
-            while hi < len(b) - 1 and deep[hi + 1]:
-                hi += 1
-            frame = [i for i in (lo - 1, hi + 1) if 0 <= i < len(b)]  # first real surfaces beside the phantom
-            if not frame:
-                continue
-            d_edge = float(np.mean(r[frame]))
-            if d_in < min_gap_ratio * d_edge:
-                continue
-            # If one "frame" reads much nearer than the other it is something standing in front of the mirror (a door
-            # frame on the near side), not the mirror's own frame: joining it gave a slanted wall across a real doorway
-            # (00808, 2026-11-01). Then both ends go at the farther frame's distance, roughly the mirror's plane.
-            d_frame = {i: float(r[i]) for i in frame}
-            if len(frame) == 2 and max(d_frame.values()) > 1.35 * min(d_frame.values()):
-                d_frame = {i: max(d_frame.values()) for i in frame}
-            ends = []
-            for i, edge in ((lo - 1, lo), (hi + 1, hi)):
-                k = i if 0 <= i < len(b) else edge  # phantom runs off the image: guess the frame's distance
-                ends.append(pos + _rotate(fwd, np.array(b[k])) * (d_frame[k] if k == i else max(d_frame.values())))
-            a, c = ends
-            u = (c - a) / max(np.linalg.norm(c - a), 1e-6)
-            segs.append((a - u * extend_m, c + u * extend_m, fwd))
-        return segs
 
     # -- control ------------------------------------------------------------------------------------------
     def step(self, depth, pose, t, face_xz=None, rgb=None):

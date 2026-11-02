@@ -20,16 +20,22 @@ class MapNavigator:
                  max_angular_radps: float = np.deg2rad(40.0), heading_gain: float = 1.5,
                  look_around_s: float = 8.0, safety: Optional[ReactiveSafetyLayer] = None,
                  max_linear_accel: float = 0.4, max_linear_decel: float = 1.5,
-                 max_angular_accel: float = np.deg2rad(120.0), replan_look: bool = True, plan_kw: Optional[dict] = None):
+                 max_angular_accel: float = np.deg2rad(120.0), replan_look: bool = True, plan_kw: Optional[dict] = None,
+                 floor_scale: bool = True, worker=None):
         """look_around_s: spin in place (~360 deg at max_angular_radps) to seed the map, the usual start of an
         exploration run; both conditions do it. The same look is repeated when the route suddenly reverses
         (a new obstacle closed the way it was heading: look before committing to a long detour) or the robot
         has stopped making progress (replan_look=False keeps only the stuck trigger, for an explorer whose goal
         legitimately jumps between frontiers). The accel limits ramp commands the way a real
-        base would (braking is allowed to be sharper than speeding up). plan_kw: overrides for `local_map.plan`."""
+        base would (braking is allowed to be sharper than speeding up). plan_kw: overrides for `local_map.plan`.
+        floor_scale=False uses the depth as given (no floor-plane rescaling): the depth-error study switches the
+        self-calibration off to see what a uniform scale error costs without it. worker: a `PerceptionWorker` whose
+        looks ground "mirror" (its `results` feed `reflection_segments`), for the fast/slow mirror guard."""
         self.goal = np.asarray(goal_xz, float)
         self.map = OccupancyMap(np.asarray(map_center_xz, float), size_m=map_size_m)
         self.scale = FloorScale()
+        self.use_floor_scale = floor_scale
+        self.worker = worker
         self.max_linear_mps, self.max_angular_radps, self.heading_gain = max_linear_mps, max_angular_radps, heading_gain
         self.look_around_s, self.replan_look = look_around_s, replan_look
         self.plan_kw = dict(plan_kw or {})
@@ -51,7 +57,7 @@ class MapNavigator:
         (FORESIGHT uses it to look at a flagged view again); an ongoing look-around is paused meanwhile.
         creep_mps: while facing, drive straight at this speed once within 15 deg of face_xz (closing in on an
         object; the safety layer still applies)."""
-        s = self.scale.update(depth)
+        s = self.scale.update(depth) if self.use_floor_scale else 1.0
         bearings, ranges = depth_scan(depth, s)
         pos = np.asarray(pose["position"], float)[[0, 2]]
         fwd = np.asarray(pose["forward_xz"], float)
@@ -160,3 +166,60 @@ class MapNavigator:
         d_wall = float(np.clip(d_edge, 0.8, 3.0))
         self.map.add_wall(pos, fwd, d_wall, d_wall * np.tan(np.deg2rad(35.0)) + 0.3)
         return True
+
+    def through_wall(self, a_xz, b_xz) -> bool:
+        if not self.map.walls:
+            return False
+        a, b = np.asarray(a_xz, float), np.asarray(b_xz, float)
+        n = max(int(np.linalg.norm(b - a) / (self.map.res / 2)), 2)
+        pts = a[None, :] + (b - a)[None, :] * np.linspace(0.05, 0.95, n)[:, None]
+        return bool(self.map.virtual[self.map.cell(pts)].any())
+
+    def reflection_segments(self, seen_t: float, min_gap_ratio: float = 1.3, far_m: float = 4.0,
+                            extend_m: float = 0.25, hfov_deg: float = 90.0) -> list:
+        """Wall off a confirmed reflection where Qwen boxed the mirror in that view (not across the whole view: a
+        note can be about something off to the side). Per mirror box: the scan bearings inside the box seed a
+        "phantom" region, grown sideways while the scan stays about as deep; the first shallower hits on either
+        side are the real surfaces framing the mirror, and the wall joins them (so it lies roughly on the mirror's
+        plane and leaves no gap at its ends). Only if the phantom reads `min_gap_ratio` x deeper than its frame.
+        No mirror box, or no gap -> no wall. -> [(a_xz, b_xz, view fwd)]."""
+        res = self.worker.results.get(seen_t)
+        if res is None or seen_t not in self.scans:
+            return []
+        pos, fwd, b, r = self.scans[seen_t]
+        r = np.where(np.isfinite(r), r, far_m)
+        tan_h = np.tan(np.deg2rad(hfov_deg) / 2)
+        segs = []
+        for box in res["boxes"].get("mirror", []):
+            a1, a2 = (np.arctan((box[k] / 1000 - 0.5) * 2 * tan_h) for k in (0, 2))
+            span = a2 - a1
+            inner = np.nonzero((b > a1 + 0.1 * span) & (b < a2 - 0.1 * span))[0]
+            if span < np.deg2rad(6) or inner.size == 0:
+                continue
+            d_in = float(np.median(r[inner]))
+            deep = r > d_in / min_gap_ratio
+            lo, hi = int(inner.min()), int(inner.max())
+            while lo > 0 and deep[lo - 1]:
+                lo -= 1
+            while hi < len(b) - 1 and deep[hi + 1]:
+                hi += 1
+            frame = [i for i in (lo - 1, hi + 1) if 0 <= i < len(b)]  # first real surfaces beside the phantom
+            if not frame:
+                continue
+            d_edge = float(np.mean(r[frame]))
+            if d_in < min_gap_ratio * d_edge:
+                continue
+            # If one "frame" reads much nearer than the other it is something standing in front of the mirror (a door
+            # frame on the near side), not the mirror's own frame: joining it gave a slanted wall across a real doorway
+            # (00808, 2026-11-01). Then both ends go at the farther frame's distance, roughly the mirror's plane.
+            d_frame = {i: float(r[i]) for i in frame}
+            if len(frame) == 2 and max(d_frame.values()) > 1.35 * min(d_frame.values()):
+                d_frame = {i: max(d_frame.values()) for i in frame}
+            ends = []
+            for i, edge in ((lo - 1, lo), (hi + 1, hi)):
+                k = i if 0 <= i < len(b) else edge  # phantom runs off the image: guess the frame's distance
+                ends.append(pos + _rotate(fwd, np.array(b[k])) * (d_frame[k] if k == i else max(d_frame.values())))
+            a, c = ends
+            u = (c - a) / max(np.linalg.norm(c - a), 1e-6)
+            segs.append((a - u * extend_m, c + u * extend_m, fwd))
+        return segs

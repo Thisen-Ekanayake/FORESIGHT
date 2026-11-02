@@ -47,6 +47,7 @@ class TimedEpisode:
     meters_per_pixel: float = 0.05
     reached_goal_at: Optional[float] = None  # sim time, when stop_radius_m was given and reached
     contact_at: Optional[float] = None  # sim time the camera came within stop_on_contact_m of a surface
+    extra: Optional[dict] = None  # whatever `on_end(sim, episode)` returned (e.g. geodesic scoring)
 
 
 def run_timed_episode(
@@ -67,6 +68,10 @@ def run_timed_episode(
     stop_on_contact_m: Optional[float] = None,
     keep_frames: bool = True,
     oracle_semantic: bool = False,
+    semantic: bool = False,
+    frame_stats: Optional[Callable[[np.ndarray, np.ndarray, dict], dict]] = None,
+    on_end: Optional[Callable] = None,
+    seed: int = 0,
 ) -> TimedEpisode:
     """width/height: sensor resolution (what the stored frames are, e.g. for a video). model_size:
     optional (w, h) the frame is resized to before the depth model and `decide` see it, so a
@@ -76,8 +81,16 @@ def run_timed_episode(
     (turning in place next to a wall is not a crash) — the same rule for every agent. keep_frames=False
     drops the per-tick RGB frames (a 90 s run at 1024x1024 is ~2.8 GB) when the poses are enough, e.g. to
     re-render the views for a video. oracle_semantic: test harnesses only — adds the sim's instance-id image as
-    pose["oracle_semantic"] (and the simulator as pose["oracle_sim"]) so a scripted stand-in can replace a model."""
-    uuids = ("rgb", "depth", "semantic") if oracle_semantic else ("rgb", "depth")
+    pose["oracle_semantic"] (and the simulator as pose["oracle_sim"]) so a scripted stand-in can replace a model.
+
+    depth_estimator: a `ZeroShotDepthEstimator` (`.estimate(rgb)`), or a `foresight.perception.depth.sources`
+    `DepthSource`, called as `source(model_rgb, obs)` and reset per episode with the simulator and `seed` (ground truth
+    with injected error, for the depth-error study). semantic: render the instance-id image into `obs` (sources that
+    mask reflective pixels need it; it is never passed to `decide`). frame_stats(model_rgb, depth_given, obs) -> dict,
+    merged into each tick's log (depth error vs GT, difficulty measures): evaluation only. on_end(sim, episode) -> dict,
+    called before the simulator closes, stored as `episode.extra` (geodesic scoring needs the navmesh)."""
+    uuids = ("rgb", "depth", "semantic") if (oracle_semantic or semantic) else ("rgb", "depth")
+    is_source = hasattr(depth_estimator, "reset") and not hasattr(depth_estimator, "estimate")
     sim = habitat_sim.Simulator(make_sim_config(dataset_config, scene_id, width, height, sensor_uuids=uuids))
     try:
         agent = sim.get_agent(0)
@@ -87,6 +100,8 @@ def run_timed_episode(
         state.position = start
         state.rotation = quat_from_angle_axis(start_yaw_rad, np.array([0.0, 1.0, 0.0]))
         agent.set_state(state)
+        if is_source:
+            depth_estimator.reset(sim, seed)
 
         times, frames, positions, collided, steps = [], [], [np.asarray(start, np.float32)], [], []
         t, reached, contact = 0.0, None, None
@@ -106,14 +121,18 @@ def run_timed_episode(
             bearing = goal_bearing_rad(agent_state.position, agent_state.rotation, goal)
 
             t0 = time.perf_counter()
-            depth = depth_estimator.estimate(model_rgb)  # returns a CPU array, so this is GPU-synchronised
+            # returns a CPU array, so this is GPU-synchronised
+            depth = depth_estimator(model_rgb, obs) if is_source else depth_estimator.estimate(model_rgb)
             depth_ms = (time.perf_counter() - t0) * 1000
+            t_stats = time.perf_counter()
+            stats = frame_stats(model_rgb, depth, obs) if frame_stats is not None else {}
+            stats_ms = (time.perf_counter() - t_stats) * 1000  # evaluation only: not part of the robot's compute
             pose = {"position": np.asarray(agent_state.position, float), "forward_xz": [float(fwd[0]), float(fwd[2])]}
             if oracle_semantic:
                 pose["oracle_semantic"], pose["oracle_sim"] = obs["semantic"], sim
             linear, angular, diagnostics = decide(model_rgb, depth, bearing, t, pose)
             wall_ms = (time.perf_counter() - t0) * 1000
-            tick_ms = wall_ms - diagnostics.get("background_ms", 0.0)
+            tick_ms = wall_ms - diagnostics.get("background_ms", 0.0) - stats_ms
             dt = max(control_period_s, tick_ms / 1000)
 
             hit = integrate_velocity_step(sim, agent, linear, angular, dt)
@@ -124,7 +143,7 @@ def run_timed_episode(
             collided.append(hit)
             steps.append({"t": t, "dt": dt, "tick_compute_ms": tick_ms, "depth_ms": depth_ms,
                           "goal_bearing_rad": bearing, "forward_xz": [float(fwd[0]), float(fwd[2])], "gt_depth_ahead_m": gt_ahead, "linear_velocity": linear,
-                          "angular_velocity": angular, "collided": hit, **diagnostics})
+                          "angular_velocity": angular, "collided": hit, **stats, **diagnostics})
             t += dt
             if diagnostics.get("episode_done"):  # the agent declared its task finished (or gave up)
                 break
@@ -134,7 +153,10 @@ def run_timed_episode(
 
         topdown = np.asarray(sim.pathfinder.get_topdown_view(meters_per_pixel, float(start[1])), dtype=bool)
         bounds_min = np.asarray(sim.pathfinder.get_bounds()[0], np.float32)
-        return TimedEpisode(np.asarray(times), frames, np.stack(positions), np.asarray(collided), steps, start, goal,
-                            topdown, bounds_min, meters_per_pixel, reached, contact)
+        ep = TimedEpisode(np.asarray(times), frames, np.stack(positions), np.asarray(collided), steps, start, goal,
+                          topdown, bounds_min, meters_per_pixel, reached, contact)
+        if on_end is not None:
+            ep.extra = on_end(sim, ep)
+        return ep
     finally:
         sim.close()
