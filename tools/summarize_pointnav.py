@@ -84,6 +84,10 @@ def main():
     args = p.parse_args()
     root = Path(args.root)
     rows = load(root)
+    void = {r["episode"] for r in rows if r.get("scan_hole")}
+    if void:
+        print(f"voided (a run met a hole in the scanned mesh): {sorted(void)}")
+        rows = [r for r in rows if r["episode"] not in void]
     if args.only:
         rows = [r for r in rows if r["cell"] in set(args.only)]
     summary = {"all": table(rows, args.ref, f"## {root} (all episodes)")}

@@ -21,7 +21,8 @@ class MapNavigator:
                  look_around_s: float = 8.0, safety: Optional[ReactiveSafetyLayer] = None,
                  max_linear_accel: float = 0.4, max_linear_decel: float = 1.5,
                  max_angular_accel: float = np.deg2rad(120.0), replan_look: bool = True, plan_kw: Optional[dict] = None,
-                 floor_scale: bool = True, worker=None):
+                 floor_scale: bool = True, worker=None, escape: bool = False, escape_after_s: float = 2.0,
+                 escape_s: float = 1.2, escape_mps: float = 0.15):
         """look_around_s: spin in place (~360 deg at max_angular_radps) to seed the map, the usual start of an
         exploration run; both conditions do it. The same look is repeated when the route suddenly reverses
         (a new obstacle closed the way it was heading: look before committing to a long detour) or the robot
@@ -30,7 +31,13 @@ class MapNavigator:
         base would (braking is allowed to be sharper than speeding up). plan_kw: overrides for `local_map.plan`.
         floor_scale=False uses the depth as given (no floor-plane rescaling): the depth-error study switches the
         self-calibration off to see what a uniform scale error costs without it. worker: a `PerceptionWorker` whose
-        looks ground "mirror" (its `results` feed `reflection_segments`), for the fast/slow mirror guard."""
+        looks ground "mirror" (its `results` feed `reflection_segments`), for the fast/slow mirror guard.
+        escape: if the safety layer has vetoed forward motion for `escape_after_s` while the route still points ahead
+        (within 35 deg), reverse at `escape_mps` for `escape_s` (the safety layer is not consulted: the camera can't
+        see behind), then replan. Without it a robot that starts or ends up ~0.3 m from a wall can face it forever:
+        the route's first leg runs through the inflated wall, the planner's turn is ~0 and the stop never clears
+        (point-goal pilot, a-00800-02 with ground-truth depth: 109 s without moving, 2026-11-02). Off by default, so
+        object search keeps its evaluated behaviour."""
         self.goal = np.asarray(goal_xz, float)
         self.map = OccupancyMap(np.asarray(map_center_xz, float), size_m=map_size_m)
         self.scale = FloorScale()
@@ -51,6 +58,10 @@ class MapNavigator:
         self._prev_dir = None  # unit direction of the route ~1.5 m ahead, last tick
         self._trail = []  # (t, pos) for the stuck check
         self.scans: dict = {}  # sim time -> (pos, fwd, bearings, ranges): reflection walls are drawn from the flagged view
+        self.escape, self.escape_after_s, self.escape_s, self.escape_mps = escape, escape_after_s, escape_s, escape_mps
+        self._blocked_since = None
+        self._escape_until = -np.inf
+        self.n_escapes = 0
 
     def step(self, depth: np.ndarray, pose: dict, t: float, face_xz=None, creep_mps: float = 0.0):
         """face_xz: if given, hold position and turn to face this direction instead of following the route
@@ -86,9 +97,24 @@ class MapNavigator:
             linear, angular = 0.0, self.max_angular_radps
         scaled = depth * s
         safe = self.safety.apply(scaled, linear, angular)
-        # On a stop, only forward motion is vetoed: turning in place can't hit anything, and the planner's
-        # turn (or the look-around spin) is what gets the robot unstuck, not the guard's left/right guess.
-        linear, angular = self._ramp(t, safe.linear_velocity, angular if safe.level == "stop" else safe.angular_velocity)
+        escaping = False
+        if self.escape:
+            route_ahead = (not looking and face_xz is None and pl.carrot_xz is not None
+                           and abs(np.arctan2((pl.carrot_xz - pos) @ right, (pl.carrot_xz - pos) @ fwd)) < np.deg2rad(35.0))
+            if safe.level == "stop" and route_ahead and t >= self._escape_until:
+                self._blocked_since = t if self._blocked_since is None else self._blocked_since
+                if t - self._blocked_since >= self.escape_after_s:
+                    self._escape_until, self._blocked_since = t + self.escape_s, None
+                    self.n_escapes += 1
+            elif safe.level != "stop":
+                self._blocked_since = None
+            escaping = t < self._escape_until
+        if escaping:
+            linear, angular = self._ramp(t, -self.escape_mps, 0.0)
+        else:
+            # On a stop, only forward motion is vetoed: turning in place can't hit anything, and the planner's
+            # turn (or the look-around spin) is what gets the robot unstuck, not the guard's left/right guess.
+            linear, angular = self._ramp(t, safe.linear_velocity, angular if safe.level == "stop" else safe.angular_velocity)
         h, w = depth.shape
         return linear, angular, {
             "depth_scale": s,
@@ -98,6 +124,7 @@ class MapNavigator:
             "plan_path": [p.tolist() for p in pl.path_xz[::3]],
             "plan_cost": pl.cost_to_goal,
             "looking_around": self._look[2] if looking else None,
+            "escaping": escaping,
             "facing": face_xz is not None,
             "map_score": np.clip(self.map.score * 30, -127, 127).astype(np.int8),
             "map_walls": list(self.map.walls),

@@ -207,6 +207,8 @@ def run_one(args, e, cond, depth_spec, out_json: Path):
     rec = {"episode": e["name"], "scene": e["scene"], "condition": cond, "depth": depth_spec, "set": args.set,
            "stratum": e.get("stratum"), "reflective_path_mean": e.get("reflective_mean"),
            "success": success, "spl": spl, "progress": progress, "crash": crash, "contact_at": ep.contact_at,
+           # GT depth ~0 straight ahead = a hole in the scanned mesh, not an obstacle: voided for every condition
+           "scan_hole": bool(crash and min(st["gt_depth_ahead_m"] for st in s[-3:]) < 0.05),
            "reached_at": ep.reached_goal_at, "sim_s": float(ep.times[-1] + s[-1]["dt"]) if s else 0.0,
            "timeout": not success and not crash, "geodesic_m": g0, "geodesic_end_m": x["geodesic_end_m"], "path_m": x["path_m"],
            "navmesh_collisions": int(ep.collided.sum()), "ticks": len(s), "wall_s": wall,
