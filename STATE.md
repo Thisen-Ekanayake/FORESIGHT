@@ -31,6 +31,11 @@ Read with `PLAN.md` (the plan, revised after the lit review) and `logs/2026-11-0
 - Throughput: GT-based runs ~10 s wall per episode, DA ~50 s (three workers in parallel); FORESIGHT ~105 s and
   7.5 GB GPU peak, so it runs alone.
 
+## Sweep schedule (2026-11-04)
+
+Resumed 02:16 (estimated ~10 h in total). `scripts/stop_sweep_at.sh 09:00` stops it at 09:00 and appends the run count to
+`results/runs/pointnav/sweep_A.log`. It stays stopped until resumed with the first command below.
+
 ## To resume
 
 ```bash
