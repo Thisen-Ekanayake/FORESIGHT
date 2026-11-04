@@ -84,10 +84,13 @@ def main():
     args = p.parse_args()
     root = Path(args.root)
     rows = load(root)
-    void = {r["episode"] for r in rows if r.get("scan_hole")}
-    if void:
-        print(f"voided (a run met a hole in the scanned mesh): {sorted(void)}")
-        rows = [r for r in rows if r["episode"] not in void]
+    # A run that met a hole in the scanned mesh is voided on its own: it leaves its cell, and any paired comparison
+    # loses that pair. (Voiding the episode everywhere when *any* of ~36 cells met a hole dropped 24 of 120 episodes.)
+    holes = [r for r in rows if r.get("scan_hole")]
+    if holes:
+        print(f"voided {len(holes)} runs that met a hole in the scanned mesh "
+              f"({len({r['episode'] for r in holes})} episodes, {len({r['cell'] for r in holes})} cells)")
+        rows = [r for r in rows if not r.get("scan_hole")]
     if args.only:
         rows = [r for r in rows if r["cell"] in set(args.only)]
     summary = {"all": table(rows, args.ref, f"## {root} (all episodes)")}

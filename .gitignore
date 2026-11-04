@@ -1,6 +1,6 @@
 data/
 logs/
-results/
+/results/
 models/
 __pycache__/
 CLAUDE.md
