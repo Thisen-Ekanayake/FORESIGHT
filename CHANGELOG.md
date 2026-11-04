@@ -3,6 +3,24 @@
 Notable changes to FORESIGHT, newest first. Day-by-day working notes live in `logs/` (untracked);
 milestone status in `PROGRESS.md`.
 
+## [Unreleased] — Deliverable A: depth-error propagation (2026-11-02 – 2026-11-04)
+
+### Added
+- Point-goal evaluation: depth sources (`perception/depth/sources.py`), `tools/run_pointnav_eval.py`,
+  `tools/summarize_pointnav.py`, `eval/stats.py`, `tools/make_pointnav_episodes.py` (sets A 3003 / S 3004 + dev sets),
+  `scripts/run_depth_error_sweep.sh`, `scripts/stop_sweep_at.sh`, `tools/plot_depth_error.py`.
+- `MapNavigator`: `floor_scale` switch, opt-in escape manoeuvre, `reflection_segments`/`through_wall` moved down from
+  `ObjectSearchNavigator`. `timed_episode`: DepthSource, semantic sensor, frame_stats, on_end.
+
+### Results
+- `docs/results/depth_error_A.md`: 5,600 runs. DA-V2 vs ground truth, map navigator: 79% vs 83% (10 homes, n.s.),
+  71% vs 89% (4 annotated homes, p = 0.006). Scale error harmless with floor calibration, catastrophic without; 10%
+  zero-mean noise collapses the map navigator to 5%; injected reflective error has no aggregate effect on random
+  episodes.
+
+### Changed
+- `.gitignore`: `results/` anchored to the repo root so `docs/results/` is tracked.
+
 ## [Unreleased] — Literature review and next-phase plan (2026-11-02)
 
 ### Added

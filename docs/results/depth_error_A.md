@@ -80,7 +80,52 @@ Depth Anything V2. Runner `tools/run_pointnav_eval.py`, sweep `scripts/run_depth
   pending).
 - Scan holes remove ~10% of runs; voiding is per run, so cells differ slightly in which episodes they keep.
 
-## Structured errors (set S): pending
+## Structured errors (set S, 4 annotated homes)
 
-Stage 4 of the sweep: reflective factor ×1.5/2/3 on mirror/glass pixels, flattened texture, and the scale-aligned
-swaps (estimator error on reflective/textureless pixels only, or fixed there). This is the test of H-A's structured half.
+64 episodes in the 4 homes with semantic annotations, half of them per home the shortest paths that see the most
+mirror/glass (reflective pixels along the path: exposed 4–16% mean, random 0–7%); set S seed 3004, fixed before any run.
+151 runs voided for scan holes (12 episodes); cells keep 54–57 episodes.
+
+| Depth given (map navigator) | n | Success % [95%] | Crash % | Depth AbsRel | vs GT (−/+, p) |
+|---|---|---|---|---|---|
+| Ground truth | 57 | 89 [81, 96] | 0 | 0.00 | ref |
+| Depth Anything V2 | 55 | 71 [58, 82] | 4 | 1.41 | −11/+1, p = 0.006 |
+| GT, mirror/glass pixels read × 1.5 / 2 / 3 too deep | 56–57 | 89 / 89 / 89 | 0 | 0.02–0.08 | −0/+0 at every level |
+| GT, textureless regions flattened | 57 | 86 | 0 | 0.01 | −3/+1, p = 0.63 |
+| GT everywhere, DA's own (scale-aligned) error on mirror/glass only | 57 | 84 | 0 | 0.00 | −3/+0, p = 0.25 |
+| GT everywhere, DA's error on textureless regions only | 55 | 93 | 0 | 0.04 | −0/+2, p = 0.50 |
+| DA everywhere, mirror/glass pixels fixed (GT) | 55 | 78 | 4 | 1.40 | vs DA: +7 points (n.s.) |
+| DA everywhere, textureless regions fixed (GT) | 54 | 80 | 0 | 1.36 | vs DA: +9 points (n.s.) |
+| Heuristic: GT / reflect × 3 | 57 | 35 / 30 | 0 / **11** | | reflect × 3 adds crashes |
+
+Exposed vs random stratum: same pattern (map + reflect × 3: 96% = GT on exposed episodes).
+
+What it says:
+
+1. **On these homes Depth Anything does cost the map navigator** (89% → 71%, p = 0.006), unlike on the 10-home set A
+   (83% → 79%, n.s.). The difference is not explained by one surface type: fixing DA's mirror/glass pixels recovers
+   ~7 of the 18 points and fixing its textureless regions ~9, neither significant at n ≈ 55.
+2. **Injected reflective error does not move the map navigator on random point-goal episodes, even exposed ones**
+   (89% at every factor up to ×3). Mirror/glass is a few percent of the pixels seen, the occupancy map fuses many views
+   (a mirror seen obliquely or from its side is mapped correctly), and random start/goal pairs rarely require driving
+   *at* a mirror. The reactive heuristic, which has no map, does start crashing (×3: 11% crashes vs 0%).
+3. **So H-A's structured half is not supported in aggregate.** Reflective failure is real (the staged 00808 hallway
+   mirror crashed the depth-only robots in every object-search set), but it is a *tail* event: a random-episode
+   benchmark dilutes it to nothing. Measuring it needs targeted encounters (start facing a mirror or glass pane with
+   the goal behind or beside it), which is how the mirror/glass stratum of C should be built (PLAN.md).
+4. **Textureless regions are harmless for both navigators** in HM3D (flattened texture or DA's error there: no effect).
+
+## Summary for H-A
+
+| Error type | Map navigator | Reactive heuristic |
+|---|---|---|
+| Global scale (the estimator's dominant error) | harmless *with* floor calibration; catastrophic without | harmless (calibrated) |
+| Additive bias | too near halves success; too far helps until it crashes | – |
+| Zero-mean noise | catastrophic at σ = 10% (phantom obstacles from per-column nearest points) | harmless |
+| Missing data, quantization | harmless | harmless |
+| Reflective (structured) | harmless in aggregate | crashes at × 3 |
+| Textureless (structured) | harmless | harmless |
+
+Error **type** predicts navigation error far better than error **magnitude**, and the damaging types depend on how the
+navigator uses depth (calibration, per-column nearest points, map vs reactive). The real estimator's error is mostly
+the benign kind once scale is calibrated.

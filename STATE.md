@@ -10,7 +10,7 @@ Read with `PLAN.md` (the plan, revised after the lit review) and `logs/2026-11-0
 | 1 Lit review (Athena) | ✅ Six maps, gaps, idea checks, web cross-check; plan revised from it (`e4eace9`) | `docs/lit_review/`, Athena feedback in `/ml/Athena/docs/feedback/2026-11-02-foresight-lit-review.md` (uncommitted in Athena's repo) |
 | 2 Point-goal infrastructure | ✅ Depth sources (da / gt / gt:errors / scale-aligned masked swaps), runner, paired stats, escape manoeuvre, scan-hole voiding (`9e9ff6b`, `042d539`, last commit) | `src/foresight/perception/depth/sources.py`, `tools/run_pointnav_eval.py`, `tools/summarize_pointnav.py`, `src/foresight/eval/stats.py` |
 | Episode sets | ✅ Evaluation sets fixed and committed before any run: **A** = `episodes_A_3003.json` (120, 10 homes), **S** = `episodes_S_3004.json` (64, 4 annotated homes, reflective-stratified). Dev sets: `A_3001`, `S_3002` (pilot ran there). | `experiments/configs/pointnav/` |
-| 3 Deliverable A (sweep) | ⏸ **Started, then stopped on request** after 10 of ~3,500 runs | `scripts/run_depth_error_sweep.sh`, outputs `results/runs/pointnav/A/` |
+| 3 Deliverable A | ✅ Sweep complete (5,600 runs, 2026-11-04); results + figure in `docs/results/depth_error_A.md` | `results/runs/pointnav/{A,S}/summary.json` |
 
 ## Pilot findings (dev set A_3001, 30 episodes, scan holes voided → 27)
 
@@ -50,7 +50,14 @@ Stages in the script, in order (~6–8 h left on the RTX 4060):
 3. `heuristic` on the key levels;
 4. structured errors (reflect, flat_tex, masked swaps) for `map` + `heuristic` on set S.
 
-## Next, after the sweep
+## Next (as of 2026-11-04 18:30)
+
+Done since: the A analysis and figure (`docs/results/depth_error_A.md`). Headline: error type, not magnitude, predicts
+navigation error; reflective error doesn't show up on random episodes, so C needs encounter episodes (PLAN.md Phase 4).
+Remaining, in order: v2.2 mirror guard on the dev sets (B); encounter episodes for C; a robust-scan ablation for the
+noise collapse (per-column percentile or median-filtered depth) is optional.
+
+## Earlier next-steps list (kept for reference)
 
 1. **Analysis + figures for A** (not written yet): per-error-type curves of success/SPL/crash against depth AbsRel/RMSE
    with CIs; DA-V2 placed on the curve; floor-scale on vs off; share of collisions with structured error before

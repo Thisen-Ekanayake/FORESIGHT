@@ -138,7 +138,20 @@ control), time budget per episode, N per cell.
 
 **Done when:** the curve figure + table, with the real estimator marked on it.
 
+## Phase 3 result (2026-11-04, `docs/results/depth_error_A.md`)
+
+Sweep complete (5,600 runs). Error *type* predicts navigation error, magnitude does not. Depth Anything V2's error is
+mostly global scale, which the floor calibration removes (map navigator 79% vs GT 83% on set A, n.s.; 71% vs 89% on
+set S, p = 0.006). Zero-mean noise collapses the map navigator (phantom obstacles from per-column nearest points).
+**Injected reflective error does not move aggregate success on random episodes**, even mirror-exposed ones: reflective
+failure is a tail event, so C's mirror/glass stratum must use targeted encounters (below).
+
 ## Phase 4 — Milestone #8 + Deliverable C: difficulty-stratified benchmark
+
+**Change after Phase 3:** random point-goal episodes dilute reflective failures to nothing. The mirror/glass stratum is
+built from *encounter* episodes instead: start 2–4 m from a mirror or glass pane, facing it (± 30°), goal behind or
+beside it, scouted from the HM3D-Semantics annotations of the 4 annotated homes (the 00808 hallway mirror is one);
+reported per encounter type, with GT / DA / masked-swap depth, and the map navigator vs FORESIGHT.
 
 Each axis gets a *measured* difficulty level, as the spec asks. After the lit review, **mirror/glass and textureless
 are the primary axes**. Low light and motion blur are already benchmarked (RobustNav, NavTrust), so they become a
