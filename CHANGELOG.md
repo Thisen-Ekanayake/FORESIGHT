@@ -3,6 +3,17 @@
 Notable changes to FORESIGHT, newest first. Day-by-day working notes live in `logs/` (untracked);
 milestone status in `PROGRESS.md`.
 
+## [Unreleased] — Showcase video (2026-11-08)
+
+### Added
+- `tools/make_showcase_video.py`, `viz/showcase_video.py` and `viz/showcase_assets.py` build a narrated square
+  1920x1920 project overview for LinkedIn, modelled on the Habitat platform promo. It runs about 3:24.
+  - Segments: logo, how it works, HM3D fly-throughs and a 3D floor-plan mosaic, point-goal and object-search clips,
+    "same robot, different depth" (set-A episode `a-00800-00` with GT / DA-V2 / ×2.5 scale / 10% noise), the mirror
+    encounter, the set-A result bars, and what's next.
+  - New assets: photographic cutaways of all 13 HM3D homes and tilted "dollhouse" floor plans extruded from them.
+  - Docs: `docs/tools/make_showcase_video.md`.
+
 ## [Unreleased] — Deliverable A: depth-error propagation (2026-11-02 – 2026-11-04)
 
 ### Added

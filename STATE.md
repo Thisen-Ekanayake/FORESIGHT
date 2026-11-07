@@ -71,6 +71,12 @@ noise collapse (per-column percentile or median-filtered depth) is optional.
    definitions (not implemented yet).
 4. Phase 5 (B) tables, then the write-up.
 
+## Side thread: showcase video (2026-11-08)
+
+`tools/make_showcase_video.py` builds a narrated 1920x1920 LinkedIn overview, about 3:30
+(`results/runs/showcase/foresight_showcase.mp4`, see `docs/tools/make_showcase_video.md`). This was user-requested
+and doesn't change the A → C → B order: the v2.2 mirror guard is still next.
+
 ## Loose ends
 
 - PROGRESS.md is git-ignored and was only lightly updated (points to PLAN.md). Milestones #8 and deliverable A
