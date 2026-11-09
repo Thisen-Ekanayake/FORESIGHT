@@ -27,10 +27,14 @@ import numpy as np
 from PIL import Image
 from scipy.ndimage import uniform_filter
 
-# HM3D categories that are mirrors or see-through glass (4 annotated minival homes: mirror 19, glass 10, window 81,
-# shower door/cabin 4, stained glass 1). Windows are glass panes in a wall; most HM3D window frames are separate
-# "window frame" objects and are not included.
-REFLECTIVE_CATEGORIES = ("mirror", "glass", "window", "shower door", "shower cabin", "stained glass")
+# HM3D categories that are mirrors or see-through glass in the 4 annotated minival homes: mirror 19, closet mirror wall 7
+# (00808: the hallway and closet mirrors behind every object-search mirror crash), glass 10, window 81, exhibition window
+# 20 and door window 2 (00803), shower door/cabin 4, stained glass 1. Frames, curtains and shutters are not glass and are
+# left out. "closet mirror wall", "exhibition window" and "door window" were added on 2026-11-10: the list had matched
+# names exactly and missed them, so the deliverable-A sweep's reflective cells on set S (and set S's exposure
+# stratification) under-covered 00808's mirrors; those cells were re-run (docs/results/depth_error_A.md).
+REFLECTIVE_CATEGORIES = ("mirror", "closet mirror wall", "glass", "window", "exhibition window", "door window",
+                         "shower door", "shower cabin", "stained glass")
 
 
 def _resize_nearest(a: np.ndarray, hw) -> np.ndarray:

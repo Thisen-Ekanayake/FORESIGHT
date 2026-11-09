@@ -23,7 +23,7 @@ from typing import Optional
 
 import numba
 import numpy as np
-from scipy.ndimage import binary_dilation, distance_transform_edt
+from scipy.ndimage import binary_dilation, distance_transform_edt, median_filter
 
 
 class FloorScale:
@@ -69,9 +69,20 @@ class FloorScale:
 
 
 def depth_scan(depth: np.ndarray, scale: float, hfov_deg: float = 90.0, cam_height_m: float = 1.5,
-               stride: int = 4, h_min: float = 0.2, h_max: float = 1.7, r_max: float = 3.5):
-    """-> (bearings rad, positive = right; ranges m, inf where nothing within r_max)."""
+               stride: int = 4, h_min: float = 0.2, h_max: float = 1.7, r_max: float = 3.5,
+               robust: bool = False, median_px: int = 5, support: int = 3, support_m: float = 0.2):
+    """-> (bearings rad, positive = right; ranges m, inf where nothing within r_max).
+
+    robust: median-filter the (strided) depth over `median_px` x `median_px` first, and make a column's range the
+    nearest obstacle point that has at least `support` obstacle points of that column within `support_m` behind it.
+    The plain scan (nearest single point) turns zero-mean depth noise into phantom obstacles: on floor pixels the noise
+    moves the computed height across `h_min`, and the nearest such pixel wins. With 10% noise the map navigator fell
+    from 83% to 5% success (docs/results/depth_error_A.md)."""
     d = depth[::stride, ::stride].astype(np.float32) * scale
+    if robust:
+        valid = d > 0.05
+        filt = median_filter(np.where(valid, d, np.nan), size=median_px, mode="nearest")
+        d = np.where(valid & np.isfinite(filt), filt, d)
     h, w = d.shape
     f = (w / 2) / np.tan(np.deg2rad(hfov_deg) / 2)
     u = np.arange(w) - w / 2 + 0.5
@@ -80,7 +91,14 @@ def depth_scan(depth: np.ndarray, scale: float, hfov_deg: float = 90.0, cam_heig
     height = cam_height_m - v[:, None] * d / f
     rng = np.sqrt(x ** 2 + d ** 2)
     obstacle = (height > h_min) & (height < h_max) & (d > 0.05)
-    ranges = np.where(obstacle, rng, np.inf).min(axis=0)
+    if robust:
+        r = np.sort(np.where(obstacle, rng, np.inf), axis=0)  # per column, nearest first
+        with np.errstate(invalid="ignore"):  # inf - inf where a column has fewer than `support` obstacle points
+            ok = np.isfinite(r[support - 1:]) & (r[support - 1:] - r[:1 - support or None] <= support_m)
+        first = np.where(ok.any(axis=0), ok.argmax(axis=0), -1)
+        ranges = np.where(first >= 0, r[np.maximum(first, 0), np.arange(r.shape[1])], np.inf)
+    else:
+        ranges = np.where(obstacle, rng, np.inf).min(axis=0)
     ranges[ranges > r_max] = np.inf
     return np.arctan(u / f), ranges
 

@@ -22,7 +22,7 @@ class MapNavigator:
                  max_linear_accel: float = 0.4, max_linear_decel: float = 1.5,
                  max_angular_accel: float = np.deg2rad(120.0), replan_look: bool = True, plan_kw: Optional[dict] = None,
                  floor_scale: bool = True, worker=None, escape: bool = False, escape_after_s: float = 2.0,
-                 escape_s: float = 1.2, escape_mps: float = 0.15):
+                 escape_s: float = 1.2, escape_mps: float = 0.15, robust_scan: bool = False):
         """look_around_s: spin in place (~360 deg at max_angular_radps) to seed the map, the usual start of an
         exploration run; both conditions do it. The same look is repeated when the route suddenly reverses
         (a new obstacle closed the way it was heading: look before committing to a long detour) or the robot
@@ -37,7 +37,9 @@ class MapNavigator:
         see behind), then replan. Without it a robot that starts or ends up ~0.3 m from a wall can face it forever:
         the route's first leg runs through the inflated wall, the planner's turn is ~0 and the stop never clears
         (point-goal pilot, a-00800-02 with ground-truth depth: 109 s without moving, 2026-11-02). Off by default, so
-        object search keeps its evaluated behaviour."""
+        object search keeps its evaluated behaviour. robust_scan: `local_map.depth_scan(robust=True)` (median-filtered
+        depth, a column's range needs supporting points), which removes the phantom obstacles zero-mean depth noise
+        makes in the plain nearest-point scan. Off by default: deliverable A's results use the plain scan."""
         self.goal = np.asarray(goal_xz, float)
         self.map = OccupancyMap(np.asarray(map_center_xz, float), size_m=map_size_m)
         self.scale = FloorScale()
@@ -62,6 +64,7 @@ class MapNavigator:
         self._blocked_since = None
         self._escape_until = -np.inf
         self.n_escapes = 0
+        self.robust_scan = robust_scan
 
     def step(self, depth: np.ndarray, pose: dict, t: float, face_xz=None, creep_mps: float = 0.0):
         """face_xz: if given, hold position and turn to face this direction instead of following the route
@@ -69,7 +72,7 @@ class MapNavigator:
         creep_mps: while facing, drive straight at this speed once within 15 deg of face_xz (closing in on an
         object; the safety layer still applies)."""
         s = self.scale.update(depth) if self.use_floor_scale else 1.0
-        bearings, ranges = depth_scan(depth, s)
+        bearings, ranges = depth_scan(depth, s, robust=self.robust_scan)
         pos = np.asarray(pose["position"], float)[[0, 2]]
         fwd = np.asarray(pose["forward_xz"], float)
         self.map.integrate(pos, fwd, bearings, ranges)

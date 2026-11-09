@@ -41,7 +41,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # Evaluation sets (drawn with the clearance rule, committed before any run) and the first draws, kept as dev sets for
 # developing/tuning: the pilot and any fix found on it run there, never on A/S.
 SETS = {"A": "experiments/configs/pointnav/episodes_A_3003.json", "S": "experiments/configs/pointnav/episodes_S_3004.json",
-        "A_dev": "experiments/configs/pointnav/episodes_A_3001.json", "S_dev": "experiments/configs/pointnav/episodes_S_3002.json"}
+        "A_dev": "experiments/configs/pointnav/episodes_A_3001.json", "S_dev": "experiments/configs/pointnav/episodes_S_3002.json",
+        # mirror/glass encounters for deliverable C (tools/make_encounter_episodes.py): start facing a pane, goal through it
+        "E": "experiments/configs/pointnav/episodes_E_3005.json"}
 _MODELS = {}
 
 
@@ -111,7 +113,7 @@ def build(cond, e, args, start_xz, goal_xz):
     center = (start_xz + goal_xz) / 2
     size = float(max(16.0, 2 * np.linalg.norm(goal_xz - start_xz) + 12.0))
     nav_kw = dict(goal_xz=goal_xz, map_center_xz=center, map_size_m=size, max_linear_mps=v, max_angular_radps=w,
-                  safety=safety(), floor_scale=not args.no_floor_scale, escape=True)
+                  safety=safety(), floor_scale=not args.no_floor_scale, escape=True, robust_scan=args.robust_scan)
     if cond == "map":
         nav = MapNavigator(**nav_kw)
 
@@ -155,8 +157,8 @@ def run_one(args, e, cond, depth_spec, out_json: Path):
     from make_pointnav_episodes import ALL10, ANNOTATED, scene_ref
     import habitat_sim
 
-    dataset = ANNOTATED if args.set.startswith("S") else ALL10
-    semantic = args.set.startswith("S")  # annotated homes: log reflective share; reflective-masked sources need it
+    dataset = ANNOTATED if args.set[0] in "SE" else ALL10
+    semantic = args.set[0] in "SE"  # annotated homes: log reflective share; reflective-masked sources need it
     if needs_semantic(depth_spec) and not semantic:
         raise ValueError(f"{depth_spec} needs the annotated set S")
     est = model("depth") if "da" in re.split(r"[:@=,]", depth_spec) else None
@@ -221,7 +223,7 @@ def run_one(args, e, cond, depth_spec, out_json: Path):
            "pre_crash_reflective": (float(np.nanmean([st.get("reflective_frac", np.nan) for st in last])) if last and semantic else None),
            "pre_crash_textureless": (float(np.nanmean([st["textureless_frac"] for st in last])) if last else None),
            "pre_crash_err_absrel": (float(np.nanmean([st["err_absrel"] or np.nan for st in last])) if last else None),
-           "floor_scale": not args.no_floor_scale, "success_m": args.success_m, "contact_m": args.contact_m}
+           "floor_scale": not args.no_floor_scale, "robust_scan": args.robust_scan, "success_m": args.success_m, "contact_m": args.contact_m}
     if cond == "foresight":
         rec.update(slow_looks=ctl.n_slow_looks, mirror_events=[list(map(lambda v: v if not isinstance(v, float) else round(v, 2), ev))
                                                                   for ev in ctl.events],
@@ -255,6 +257,7 @@ def main():
     p.add_argument("--max-linear-mps", type=float, default=0.35)
     p.add_argument("--max-sim-s", type=float, default=None)
     p.add_argument("--no-floor-scale", action="store_true", help="use depth as given (no floor-plane self-calibration)")
+    p.add_argument("--robust-scan", action="store_true", help="map navigators: noise-robust depth scan (median + support)")
     p.add_argument("--threshold", type=float, default=0.6)
     p.add_argument("--vlm-tokens", type=int, default=96)
     args = p.parse_args()
@@ -266,7 +269,7 @@ def main():
         eps = [e for e in eps if seen.setdefault(e["scene"], []).append(e) or len(seen[e["scene"]]) <= args.limit]
     jobs = [(e, c, d) for e in eps for c in args.conditions for d in args.depth]
     jobs = jobs[args.shard::args.nshards]
-    tag = "nofs" if args.no_floor_scale else ""
+    tag = "_".join(t for t, on in (("nofs", args.no_floor_scale), ("robust", args.robust_scan)) if on)
     print(f"{len(jobs)} jobs (shard {args.shard}/{args.nshards})", flush=True)
     for e, c, d in jobs:
         out = Path(args.out) / (c + (f"_{tag}" if tag else "")) / slug(d)
