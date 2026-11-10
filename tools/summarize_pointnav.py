@@ -26,7 +26,8 @@ def load(root: Path):
         r = json.loads(f.read_text())
         if "episode" in r:
             r["cell"] = (r["condition"] + ("" if r.get("floor_scale", True) else "_nofs")
-                         + ("_robust" if r.get("robust_scan") else "") + ":" + r["depth"])
+                         + ("_robust" if r.get("robust_scan") else "") + ("_v21" if r.get("guard") == "v21" else "")
+                         + ":" + r["depth"])
             rows.append(r)
     return rows
 

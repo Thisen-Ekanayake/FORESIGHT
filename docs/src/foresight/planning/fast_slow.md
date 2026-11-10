@@ -47,3 +47,30 @@ frames, the same depth model and `reflection_segments`) showed:
 Post-hoc check on those two episodes (not evidence by itself): no crash on either; tv found at 92 s; on the demo,
 the sofa found at 122 s, the bed rejected by the close-up check, timeout at 300 s. The test is the third set,
 drawn and committed (`8d638e5`) before any run on it.
+
+## v2.2 (2026-11-10): against over-checking
+
+On point-goal (dev set `A_3001`, 30 episodes, Depth Anything depth) v2.1 succeeded 33% against 63% for the same
+navigator without it (p = 0.006): 4–18 slow checks and 1–6 confirmed walls per episode, even in homes with no annotated
+mirror; object-search set 3 showed the same over-checking in 00808. v2.2 adds three options (off by default, so object
+search keeps its evaluated v2.1 behaviour; on in `tools/run_pointnav_eval.py --guard v22`, the default there):
+
+| Option | v2.2 value | What it changes |
+|---|---|---|
+| `near_m` | 1.5 m | a candidate is in the way only where the route or heading meets it within 1.5 m (v2.1: 5 m of route, 2.5 m of heading, 3 m wedges) |
+| `walled_m` | 0.8 m | a candidate within 0.8 m of an existing wall is already handled, whatever its angle |
+| `gap_s` | 5 s | at least 5 s between the end of one slow check and the start of the next |
+
+Dev results (Depth Anything depth; paired episodes, scan holes voided):
+
+| Dev set | Map navigator only | v2.1 | v2.2 |
+|---|---|---|---|
+| `A_3001` (26 paired): success / crash | 58% / 4% | 38% / 0% | **58% / 0%** |
+| slow checks / confirmed walls per episode | – | 9.3 / 1.8 | 5.2 / 1.0 |
+| v2.2 vs map: −3/+3, p = 1; v2.2 vs v2.1: −0/+5, p = 0.06 | | | |
+| `S_3002` (16 paired, annotated homes): success / crash | 44% / 6% | – | 38% / 0% (−1/+0) |
+
+v2.2 no longer costs the navigator anything on dev, and it removes its crashes. **Open issue: precision.** On the
+annotated dev homes only 3 of 19 confirmed walls lie within 0.6 m of a real mirror/glass object (`walls_on_reflective`),
+and the slow check confirms 45% of what it checks (72 of 159). The next dev step, before the evaluation-set run (B), is a
+stricter confirmation (Laya threshold 0.6 → 0.8, or requiring both a mirror box and a phantom-room gap).

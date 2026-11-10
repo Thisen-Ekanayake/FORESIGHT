@@ -80,40 +80,94 @@ Depth Anything V2. Runner `tools/run_pointnav_eval.py`, sweep `scripts/run_depth
   pending).
 - Scan holes remove ~10% of runs; voiding is per run, so cells differ slightly in which episodes they keep.
 
+## Robust depth scan (ablation, 2026-11-10)
+
+The noise collapse comes from the map builder's scan (nearest obstacle-height point per image column). The ablation
+`depth_scan(robust=True)` median-filters the depth (5 x 5 at scan resolution) and needs 3 supporting points within 0.2 m
+per column. Set A, map navigator, ~105 episodes per cell:
+
+| Depth given | Plain scan | Robust scan | Robust vs GT (−/+, p) |
+|---|---|---|---|
+| Ground truth | 83% | 84% | −1/+2, p = 1 |
+| Depth Anything V2 | 79% | 78% | −9/+6, p = 0.61 |
+| Noise σ = 0.1 / 0.2 / 0.4 | 5% / 0% / 0% | **81% / 75%** / 1% | p = 1 / 0.18 / < 1e-24 |
+| Correlated noise σ = 0.1 / 0.2 (16 px) | 10% / 1% | 66% / 34% | p < 0.001 |
+| Bias −0.3 / +0.3 m | 43% / 94% | 43% / 92% | unchanged |
+| Scale × 2.5 | 81% | 84% | unchanged |
+
+The robust scan removes the collapse for iid noise up to σ = 0.2 at no cost elsewhere on set A; spatially correlated
+noise (smoother than the filter) is only partly fixed, and σ = 0.4 is beyond it. The trade-off shows on mirror
+encounters (below): the smoothing also erases the thin real frame around a mirror, and Depth Anything + robust scan
+crashes into mirrors more often (41% vs 25%). So the collapse was a property of how the mapper used depth, and the fix
+is not free.
+
 ## Structured errors (set S, 4 annotated homes)
 
 64 episodes in the 4 homes with semantic annotations, half of them per home the shortest paths that see the most
 mirror/glass (reflective pixels along the path: exposed 4–16% mean, random 0–7%); set S seed 3004, fixed before any run.
 151 runs voided for scan holes (12 episodes); cells keep 54–57 episodes.
 
+**Correction (2026-11-10).** The reflective category list matched names exactly and missed "closet mirror wall" (7 in
+00808, including the hallway mirror and the closet mirrors behind every object-search mirror crash), "exhibition window"
+and "door window" (00803). The reflective cells below (reflect ×, and the two reflective swaps) were re-run with the fixed
+list; the earlier runs are kept in `results/runs/pointnav/S_oldmask_*`. The conclusion did not change in aggregate, but
+the map navigator now shows crashes at × 2–3 (2–5%, previously 0%). Set S's exposure stratification was computed with the
+old list, so its "exposed" stratum under-represents 00808's closet mirrors.
+
 | Depth given (map navigator) | n | Success % [95%] | Crash % | Depth AbsRel | vs GT (−/+, p) |
 |---|---|---|---|---|---|
 | Ground truth | 57 | 89 [81, 96] | 0 | 0.00 | ref |
 | Depth Anything V2 | 55 | 71 [58, 82] | 4 | 1.41 | −11/+1, p = 0.006 |
-| GT, mirror/glass pixels read × 1.5 / 2 / 3 too deep | 56–57 | 89 / 89 / 89 | 0 | 0.02–0.08 | −0/+0 at every level |
+| GT, mirror/glass pixels read × 1.5 / 2 / 3 too deep | 56–57 | 89 / 89 / 86 | 0 / 2 / 5 | 0.02–0.12 | −1/+1 at most, p ≥ 0.5 |
 | GT, textureless regions flattened | 57 | 86 | 0 | 0.01 | −3/+1, p = 0.63 |
-| GT everywhere, DA's own (scale-aligned) error on mirror/glass only | 57 | 84 | 0 | 0.00 | −3/+0, p = 0.25 |
+| GT everywhere, DA's own (scale-aligned) error on mirror/glass only | 57 | 86 | 2 | 0.02 | −2/+0, p = 0.50 |
 | GT everywhere, DA's error on textureless regions only | 55 | 93 | 0 | 0.04 | −0/+2, p = 0.50 |
-| DA everywhere, mirror/glass pixels fixed (GT) | 55 | 78 | 4 | 1.40 | vs DA: +7 points (n.s.) |
+| DA everywhere, mirror/glass pixels fixed (GT) | 53 | 81 | 0 | 1.38 | vs DA: +10 points (n.s.) |
 | DA everywhere, textureless regions fixed (GT) | 54 | 80 | 0 | 1.36 | vs DA: +9 points (n.s.) |
-| Heuristic: GT / reflect × 3 | 57 | 35 / 30 | 0 / **11** | | reflect × 3 adds crashes |
+| Heuristic: GT / reflect × 3 | 57 | 35 / 25 | 0 / **12** | | reflect × 3 adds crashes |
 
 Exposed vs random stratum: same pattern (map + reflect × 3: 96% = GT on exposed episodes).
 
 What it says:
 
 1. **On these homes Depth Anything does cost the map navigator** (89% → 71%, p = 0.006), unlike on the 10-home set A
-   (83% → 79%, n.s.). The difference is not explained by one surface type: fixing DA's mirror/glass pixels recovers
-   ~7 of the 18 points and fixing its textureless regions ~9, neither significant at n ≈ 55.
-2. **Injected reflective error does not move the map navigator on random point-goal episodes, even exposed ones**
-   (89% at every factor up to ×3). Mirror/glass is a few percent of the pixels seen, the occupancy map fuses many views
+   (83% → 79%, n.s.). Fixing DA's mirror/glass pixels recovers ~10 of the 18 points and fixing its textureless regions
+   ~9, neither significant at n ≈ 55.
+2. **Injected reflective error barely moves the map navigator on random point-goal episodes, even exposed ones**
+   (89% → 86% at ×3, with 5% crashes; n.s.). Mirror/glass is a few percent of the pixels seen, the occupancy map fuses many views
    (a mirror seen obliquely or from its side is mapped correctly), and random start/goal pairs rarely require driving
    *at* a mirror. The reactive heuristic, which has no map, does start crashing (×3: 11% crashes vs 0%).
-3. **So H-A's structured half is not supported in aggregate.** Reflective failure is real (the staged 00808 hallway
-   mirror crashed the depth-only robots in every object-search set), but it is a *tail* event: a random-episode
-   benchmark dilutes it to nothing. Measuring it needs targeted encounters (start facing a mirror or glass pane with
-   the goal behind or beside it), which is how the mirror/glass stratum of C should be built (PLAN.md).
+3. **So H-A's structured half is not supported in aggregate**: reflective failure is a *tail* event that a random-episode
+   benchmark dilutes. Where mirrors are actually approached it dominates (encounters, next section).
 4. **Textureless regions are harmless for both navigators** in HM3D (flattened texture or DA's error there: no effect).
+
+## Mirror/glass encounters (set E, deliverable C's mirror stratum)
+
+33 encounters (`tools/make_encounter_episodes.py`, seed 3005, fixed before any run): the robot starts 1.5–4.5 m from a
+large mirror or glass pane, facing it, and the goal lies straight through it (21 closet mirror walls incl. the 00808
+hallway mirror, 4 mirrors, 8 windows). 44 runs voided for scan holes; cells keep 27–32.
+
+| Depth given (map navigator) | n | Success % [95%] | Crash % [95%] | vs GT (−/+, p) |
+|---|---|---|---|---|
+| Ground truth | 28 | 82 [68, 96] | 0 | ref |
+| **Depth Anything V2** | 28 | 64 [46, 82] | **25 [11, 43]** | −6/+2, p = 0.29 |
+| DA, mirror/glass pixels fixed (GT, scale-aligned) | 27 | **89 [74, 100]** | **0** | −1/+4, p = 0.38 |
+| GT, DA's own error on mirror/glass pixels only | 28 | 71 [54, 86] | 11 [0, 25] | −3/+0, p = 0.25 |
+| GT, mirror/glass read × 2 / × 3 too deep | 28 | 43 / 18 | **43 / 75** | p = 0.003 / < 0.001 |
+| DA, robust scan | 29 | 48 [31, 69] | 41 [24, 59] | −11/+2, p = 0.02 |
+| Heuristic: GT / DA / GT reflect × 3 | 31–32 | 34 / 29 / 16 | 0 / 26 / 25 | |
+
+By pane: every DA crash is at a closet mirror wall (7 of 21); at × 3 all 21 closet-mirror encounters crash; windows
+and the smaller mirrors rarely fail (their reflection is usually the room's own far wall or outdoors, read as "far" but
+behind a frame the scan still sees).
+
+- **Depth Anything's encounter crashes come entirely from its mirror/glass pixels**: replace only those pixels with
+  ground truth and the crashes vanish (25% → 0%, success 64% → 89%, at the GT level).
+- **The effect is dose-dependent**: reading the mirror 2× too deep crashes 43% of encounters, 3× crashes 75%.
+- So H-A's structured half holds **where reflective surfaces are actually approached**: a small fraction of pixels
+  causes most of the failures, invisible in aggregate and decisive in encounters. A mirror detector that fixes those
+  pixels would be worth more than any improvement in average depth accuracy; that is FORESIGHT's mirror guard's job
+  (deliverable B, to be run on this set).
 
 ## Summary for H-A
 
@@ -121,9 +175,9 @@ What it says:
 |---|---|---|
 | Global scale (the estimator's dominant error) | harmless *with* floor calibration; catastrophic without | harmless (calibrated) |
 | Additive bias | too near halves success; too far helps until it crashes | – |
-| Zero-mean noise | catastrophic at σ = 10% (phantom obstacles from per-column nearest points) | harmless |
+| Zero-mean noise | catastrophic at σ = 10% with the plain scan; fixed up to σ = 0.2 by the robust scan | harmless |
 | Missing data, quantization | harmless | harmless |
-| Reflective (structured) | harmless in aggregate | crashes at × 3 |
+| Reflective (structured) | harmless in aggregate; **25–75% crashes in mirror encounters** | crashes at × 3 |
 | Textureless (structured) | harmless | harmless |
 
 Error **type** predicts navigation error far better than error **magnitude**, and the damaging types depend on how the

@@ -132,7 +132,8 @@ def build(cond, e, args, start_xz, goal_xz):
                                   describe=lambda rgb: vlm.describe(rgb, prompt=REFLECTION_AWARE_PROMPT, max_new_tokens=args.vlm_tokens),
                                   present=present, extra_labels=["mirror"], describe_when=lambda: when[0]())
         nav = MapNavigator(worker=worker, **nav_kw)
-        guard = FastSlowMirrorGuard(laya, worker, nav, threshold=args.threshold)
+        v22 = dict(near_m=1.5, walled_m=0.8, gap_s=5.0) if args.guard == "v22" else {}  # see FastSlowMirrorGuard docstring
+        guard = FastSlowMirrorGuard(laya, worker, nav, threshold=args.threshold, **v22)
         when.append(guard.want_note)
 
         def decide(rgb, depth, bearing, t, pose):
@@ -178,7 +179,20 @@ def run_one(args, e, cond, depth_spec, out_json: Path):
         g0 = e["geodesic_m"]
         g_end = geo(ep.positions[-1])
         length = float(np.linalg.norm(np.diff(ep.positions[:, [0, 2]], axis=0), axis=1).sum())
-        return {"geodesic_end_m": g_end, "path_m": length}
+        out = {"geodesic_end_m": g_end, "path_m": length}
+        if cond == "foresight" and semantic:
+            # wall precision: a confirmed wall is right if its midpoint is within 0.6 m of a mirror/glass object
+            from foresight.perception.depth.sources import REFLECTIVE_CATEGORIES
+            refl = [o for o in sim.semantic_scene.objects if o is not None and o.category is not None
+                    and o.category.name().lower().strip() in REFLECTIVE_CATEGORIES]
+            walls = ctl.nav.map.walls
+            hits = 0
+            for w0, w1 in walls:
+                m = (np.asarray(w0) + np.asarray(w1)) / 2
+                p3 = np.array([m[0], start[1] + 1.0, m[1]], np.float32)
+                hits += any(o.obb.distance(p3) < 0.6 for o in refl)
+            out.update(walls_on_reflective=hits, walls_total=len(walls))
+        return out
 
     # bind the reflective ids once the simulator exists: run_timed_episode resets the source with it; piggyback on that
     orig_reset = source.reset
@@ -225,7 +239,7 @@ def run_one(args, e, cond, depth_spec, out_json: Path):
            "pre_crash_err_absrel": (float(np.nanmean([st["err_absrel"] or np.nan for st in last])) if last else None),
            "floor_scale": not args.no_floor_scale, "robust_scan": args.robust_scan, "success_m": args.success_m, "contact_m": args.contact_m}
     if cond == "foresight":
-        rec.update(slow_looks=ctl.n_slow_looks, mirror_events=[list(map(lambda v: v if not isinstance(v, float) else round(v, 2), ev))
+        rec.update(guard=args.guard, walls_on_reflective=x.get("walls_on_reflective"), slow_looks=ctl.n_slow_looks, mirror_events=[list(map(lambda v: v if not isinstance(v, float) else round(v, 2), ev))
                                                                   for ev in ctl.events],
                    walls=len(ctl.nav.map.walls), look_latency_s_median=float(np.median(ctl.worker.latencies_s or [0.0])))
     out_json.write_text(json.dumps(rec, indent=1, default=float))
@@ -259,6 +273,7 @@ def main():
     p.add_argument("--no-floor-scale", action="store_true", help="use depth as given (no floor-plane self-calibration)")
     p.add_argument("--robust-scan", action="store_true", help="map navigators: noise-robust depth scan (median + support)")
     p.add_argument("--threshold", type=float, default=0.6)
+    p.add_argument("--guard", choices=["v21", "v22"], default="v22", help="foresight: mirror guard version")
     p.add_argument("--vlm-tokens", type=int, default=96)
     args = p.parse_args()
     eps = json.loads(Path(SETS[args.set]).read_text())["episodes"]
@@ -269,7 +284,8 @@ def main():
         eps = [e for e in eps if seen.setdefault(e["scene"], []).append(e) or len(seen[e["scene"]]) <= args.limit]
     jobs = [(e, c, d) for e in eps for c in args.conditions for d in args.depth]
     jobs = jobs[args.shard::args.nshards]
-    tag = "_".join(t for t, on in (("nofs", args.no_floor_scale), ("robust", args.robust_scan)) if on)
+    tag = "_".join(t for t, on in (("nofs", args.no_floor_scale), ("robust", args.robust_scan),
+                                   ("v21", args.guard == "v21" and "foresight" in args.conditions)) if on)
     print(f"{len(jobs)} jobs (shard {args.shard}/{args.nshards})", flush=True)
     for e, c, d in jobs:
         out = Path(args.out) / (c + (f"_{tag}" if tag else "")) / slug(d)

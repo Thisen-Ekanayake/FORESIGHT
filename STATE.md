@@ -50,7 +50,17 @@ Stages in the script, in order (~6–8 h left on the RTX 4060):
 3. `heuristic` on the key levels;
 4. structured errors (reflect, flat_tex, masked swaps) for `map` + `heuristic` on set S.
 
-## Next (as of 2026-11-04 18:30)
+## State on 2026-11-10 (stopped on request before the B evaluation run)
+
+Done: robust-scan ablation, reflective-category fix + re-run, encounter set E (C's mirror stratum, non-VLM conditions),
+FORESIGHT v2.2 guard tested on the dev sets. Results in `docs/results/depth_error_A.md` and
+`docs/src/foresight/planning/fast_slow.md`. Waiting for the user before:
+1. (recommended first, ~1 h, dev only) a stricter v2.2 confirmation (Laya threshold 0.8 or box + gap), since only 3/19
+   confirmed walls are on real mirrors;
+2. the B evaluation (~7 h, VLM alone on the GPU): `foresight` (v2.2) with Depth Anything on sets A, S and E:
+   `python tools/run_pointnav_eval.py --set A --conditions foresight --depth da --out results/runs/pointnav/A` (then S, E).
+
+## Next (as of 2026-11-04 18:30, superseded)
 
 Done since: the A analysis and figure (`docs/results/depth_error_A.md`). Headline: error type, not magnitude, predicts
 navigation error; reflective error doesn't show up on random episodes, so C needs encounter episodes (PLAN.md Phase 4).

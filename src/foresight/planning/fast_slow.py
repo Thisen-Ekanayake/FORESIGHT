@@ -54,7 +54,8 @@ class FastSlowMirrorGuard:
                  hazard_question: str = "mirror", hazard_option: str = "A", threshold: float = 0.6,
                  path_m: float = 5.0, ray_m: float = 2.5, keep_s: float = 15.0, verify_timeout_s: float = 14.0,
                  align_deg: float = 8.0, banner_s: float = 3.0, same_m: float = 0.4,
-                 wedge_p: float = 0.9, wedge_m: float = 3.0, wedge_pad_deg: float = 3.0):
+                 wedge_p: float = 0.9, wedge_m: float = 3.0, wedge_pad_deg: float = 3.0,
+                 near_m: Optional[float] = None, walled_m: Optional[float] = None, gap_s: float = 0.0):
         """same_m: a candidate is already handled if it lies along an existing wall or a dismissed candidate (both ends
         and its middle within same_m of it). wedge_*: a look with P(mirror) >= wedge_p also makes a "wedge" candidate
         from each mirror box: the box's bearing span from that pose, out to wedge_m; it is in the way if the route
@@ -65,7 +66,18 @@ class FastSlowMirrorGuard:
         a 00808 closet mirror: (1) v2 called a candidate "known" if its midpoint was within 0.8 m of any wall's
         midpoint, so an earlier wall at the wrong angle hid the real candidate; (2) Qwen boxed objects *inside* the
         reflection (a TV, pictures), the region read about as near as its frame, so no gap-based candidate was made,
-        and the robot turned into the boxed mirror. Both found by replaying those looks offline."""
+        and the robot turned into the boxed mirror. Both found by replaying those looks offline.
+
+        v2.2 (2026-11-10), against over-checking: on the point-goal pilot (dev set A_3001) v2.1 ran 4-18 slow checks per
+        episode, confirmed 1-6 walls, and succeeded 33% against 63% for the same navigator without it (p = 0.006);
+        object-search set 3 showed the same in 00808. Off by default (v2.1 behaviour):
+          near_m    a candidate is in the way only where the route or heading meets it within near_m of the robot
+                    (v2.1: 5 m along the route, 2.5 m along the heading, wedges out to 3 m), so a mirror across the room
+                    costs nothing until the robot is about to reach it
+          walled_m  a candidate whose midpoint is within walled_m of an existing wall is already handled, whatever its
+                    angle (v2.1 needed it to lie *along* the wall, so a mirror walled from one side was re-checked from
+                    the next)
+          gap_s     at least gap_s between the end of one slow check and the start of the next"""
         self.laya, self.worker, self.nav, self.questions = laya, worker, navigator, questions
         self.hazard_question, self.hazard_option, self.threshold = hazard_question, hazard_option, threshold
         self.path_m, self.ray_m, self.keep_s, self.verify_timeout_s = path_m, ray_m, keep_s, verify_timeout_s
@@ -80,6 +92,10 @@ class FastSlowMirrorGuard:
         self._infer_ms = self._roundtrip_ms = 0.0
         self.events: list = []  # (t, kind, seen, p): suspect / confirmed / dismissed / timeout
         self.n_slow_looks = 0
+        self.near_m, self.walled_m, self.gap_s = near_m, walled_m, gap_s
+        if near_m is not None:
+            self.path_m, self.ray_m, self.wedge_m = min(path_m, near_m), min(ray_m, near_m), min(wedge_m, near_m)
+        self._last_check_end = -np.inf
 
     def want_note(self) -> bool:
         """Asked by the worker as a look starts: describe this view? Only once facing a suspected reflection."""
@@ -91,8 +107,11 @@ class FastSlowMirrorGuard:
 
     # -- geometry -----------------------------------------------------------------------------------------------
     def _known(self, a, b) -> bool:
-        """Lies along an existing wall, a dismissed candidate, or a pending candidate."""
+        """Lies along an existing wall, a dismissed candidate, or a pending candidate (v2.2: or near any wall)."""
         mid = (a + b) / 2
+        if self.walled_m is not None and any(_seg_dist(mid, np.asarray(w0), np.asarray(w1)) < self.walled_m
+                                             for w0, w1 in self.nav.map.walls):
+            return True
         segs = [(np.asarray(w0), np.asarray(w1)) for w0, w1 in self.nav.map.walls] + list(self._dismissed) \
             + [(c["a"], c["b"]) for c in self.candidates]
         return any(max(_seg_dist(q, s0, s1) for q in (a, b, mid)) < self.same_m for s0, s1 in segs)
@@ -123,7 +142,7 @@ class FastSlowMirrorGuard:
     def _in_way(self, c, pos, fwd) -> bool:
         a, b = c["a"], c["b"]
         if c.get("kind") == "wedge":
-            ray = [pos + fwd / np.linalg.norm(fwd) * x for x in np.arange(0.2, 2.0, 0.2)]
+            ray = [pos + fwd / np.linalg.norm(fwd) * x for x in np.arange(0.2, min(2.0, self.ray_m), 0.2)]
             path, run, pts = [pos] + [np.asarray(p, float) for p in self.nav.last_path], 0.0, []
             for p, q in zip(path[:-1], path[1:]):
                 pts += [p + (q - p) * x for x in np.linspace(0, 1, 4)]
@@ -172,7 +191,7 @@ class FastSlowMirrorGuard:
                     self._dismissed += [(c["a"], c["b"]) for c in v["cands"]]
                     event = "dismissed"
                 self.events.append((t, event, seen, self._p))
-                self._verify = None
+                self._verify, self._last_check_end = None, t
                 continue
             segs = self.nav.reflection_segments(seen)  # fast path: candidate walls from this look
             for a, b, f in segs:
@@ -184,7 +203,8 @@ class FastSlowMirrorGuard:
                     if c is not None and not self._known(c["a"], c["b"]):
                         self.candidates.append(dict(c, t=t))
         self.candidates = [c for c in self.candidates if t - c["t"] < self.keep_s]
-        if self._verify is None and event is None:  # (one event per tick: a fresh check starts next tick)
+        if self._verify is None and event is None and t - self._last_check_end >= self.gap_s:
+            # (one event per tick: a fresh check starts next tick)
             hits = [c for c in self.candidates if self._in_way(c, pos, fwd)]
             if hits:
                 c0 = hits[0]
@@ -196,7 +216,7 @@ class FastSlowMirrorGuard:
         elif self._verify is not None and t - self._verify["since"] > self.verify_timeout_s:
             # No usable look in time: stop holding the robot and don't raise these candidates again.
             self._dismissed += [(c["a"], c["b"]) for c in self._verify["cands"]]
-            event, self._verify = "timeout", None
+            event, self._verify, self._last_check_end = "timeout", None, t
             self.events.append((t, event, None, None))
         v = self._verify
         linear, angular, nav = self.nav.step(depth, pose, t, face_xz=None if v is None else v["fwd"])

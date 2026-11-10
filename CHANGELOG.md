@@ -3,6 +3,33 @@
 Notable changes to FORESIGHT, newest first. Day-by-day working notes live in `logs/` (untracked);
 milestone status in `PROGRESS.md`.
 
+## [Unreleased] — Robust scan, mirror encounters, FORESIGHT v2.2 (2026-11-10)
+
+### Added
+- `local_map.depth_scan(robust=True)` / `MapNavigator(robust_scan=)` / `run_pointnav_eval.py --robust-scan`:
+  median-filtered depth and a supported nearest point per column, against the phantom obstacles that zero-mean depth
+  noise made in the plain scan.
+- Encounter set E (`tools/make_encounter_episodes.py`, `episodes_E_3005.json`, 33 encounters, committed before any run):
+  start 1.5–4.5 m facing a mirror/glass pane, goal straight through it. Deliverable C's mirror/glass stratum.
+- `FastSlowMirrorGuard` v2.2 options `near_m`, `walled_m`, `gap_s` (off by default; `run_pointnav_eval.py --guard v22`,
+  the point-goal default) against over-checking; wall-precision diagnostic (`walls_on_reflective`) on annotated homes.
+- `scripts/run_fix_sweep.sh`, `scripts/run_b_dev.sh`.
+
+### Fixed
+- `REFLECTIVE_CATEGORIES` matched names exactly and missed "closet mirror wall" (00808, 7, incl. the hallway mirror),
+  "exhibition window" and "door window" (00803). Deliverable A's reflective cells on set S re-run with the fixed list
+  (old runs kept as `results/runs/pointnav/S_oldmask_*`).
+
+### Results (`docs/results/depth_error_A.md`, `docs/src/foresight/planning/fast_slow.md`)
+- Robust scan, set A: 10% / 20% noise 5% / 0% → 81% / 75% success (GT 84%), no cost elsewhere on set A; correlated
+  noise partly fixed; on mirror encounters it crashes more (DA: 41% vs 25%).
+- Corrected reflective masks, set S: same aggregate conclusion (map navigator 86–89% at × 1.5–3), now with 2–5% crashes.
+- Mirror encounters (set E): GT 82% / 0% crashes; Depth Anything 64% / 25%; DA with only its mirror/glass pixels
+  fixed 89% / 0%; mirror read × 2 / × 3 too deep: 43% / 75% crashes. H-A's structured half holds where mirrors are
+  approached.
+- FORESIGHT v2.2 on dev: 58% / 0% crashes vs the navigator alone 58% / 4% and v2.1 38%; slow checks 9.3 → 5.2 per
+  episode. Open: only 3 of 19 confirmed walls lie on real mirrors/glass.
+
 ## [Unreleased] — Showcase video (2026-11-08)
 
 ### Added
