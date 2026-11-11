@@ -74,3 +74,31 @@ v2.2 no longer costs the navigator anything on dev, and it removes its crashes. 
 annotated dev homes only 3 of 19 confirmed walls lie within 0.6 m of a real mirror/glass object (`walls_on_reflective`),
 and the slow check confirms 45% of what it checks (72 of 159). The next dev step, before the evaluation-set run (B), is a
 stricter confirmation (Laya threshold 0.6 → 0.8, or requiring both a mirror box and a phantom-room gap).
+
+## v2.3 (2026-11-11): wedge candidates only
+
+v2.2 now logs every confirmed wall (`wall_log`: time, Laya P, mirror-box P, candidate kind; on annotated homes also the
+distance to the nearest mirror/glass object, `on_reflective` if < 0.6 m). Diagnostic: `tools/guard_precision.py`.
+On the annotated dev episodes (`S_3002` first 4 per stratum + 12 dev encounters `E_9001`), v2.2 confirmed 45 walls, 20
+(44%) on a real mirror/glass object. Neither confidence separates them: keeping walls with Laya P ≥ 0.8 or box P ≥ 0.97
+leaves precision at 41–60% and loses real walls. What separates them is the candidate kind: walls from **depth gaps**
+(phantom-room segments, `reflection_segments`) were 6/26 on real mirrors, walls from **wedges** (the mirror box's
+bearing) 14/19. v2.3 = v2.2 + `gap_candidates=False` (`run_pointnav_eval.py --guard v23`).
+
+Dev results (Depth Anything depth; scan holes voided):
+
+| Dev set | Map navigator only | v2.2 | v2.3 |
+|---|---|---|---|
+| Confirmed walls on a real mirror/glass (annotated homes) | – | 20/45 (44%) | **21/33 (64%)** |
+| `A_3001` (28 paired): success / crash / SPL | 61% / 4% / 0.50 | 54% / 0% / 0.49 | 57% / 0% / 0.53 |
+| slow checks / confirmed walls per episode | – | 5.8 / 1.25 | 4.2 / 0.82 |
+| v2.3 vs map: −3/+2, p = 1; v2.3 vs v2.2: −2/+3, p = 1 | | | |
+| `S_3002` exposed (16): success / crash | 44% / 6% | 38% / 0% | 44% / 0% |
+| Dev encounters `E_9001`: success / crash | 40% / 40% (10) | 33% / 11% (9) | **50% / 10% (10)** |
+| slow checks per encounter | – | 8.4 | 6.6 |
+
+v2.3 keeps the real walls (21 vs 20) and drops most false ones (12 vs 25), costs nothing on plain point-goal, and on
+encounters turns the map navigator's 4 crashes in 10 into 1 while succeeding more often. Left over: 3 of 10 encounters
+still time out after 10–12 slow checks (a real mirror walled from several angles, the route keeps re-approaching it), and
+one crash at the 00808 closet mirror wall although 3 walls were confirmed on it. The dev sets are small (10–28
+episodes), so these are directions, not effects; v2.3 is the configuration for the evaluation run (B).

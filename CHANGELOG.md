@@ -3,6 +3,22 @@
 Notable changes to FORESIGHT, newest first. Day-by-day working notes live in `logs/` (untracked);
 milestone status in `PROGRESS.md`.
 
+## [Unreleased] — FORESIGHT v2.3: wedge-only mirror walls (2026-11-11)
+
+### Added
+- Per-wall guard log (`FastSlowMirrorGuard.wall_log`: Laya P, mirror-box P, candidate kind; on annotated homes the
+  distance to the nearest mirror/glass object) and `tools/guard_precision.py` (wall precision by confidence cut, by
+  candidate kind, and encounter outcomes against the map navigator).
+- `FastSlowMirrorGuard(gap_candidates=False)`, `run_pointnav_eval.py --guard v21|v22|v23`; dev encounter set
+  `episodes_E_9001.json` (12, seed 9001, dev only); `scripts/run_guard_dev.sh`, `scripts/run_guard_dev_v23.sh`.
+
+### Results (`docs/src/foresight/planning/fast_slow.md`, v2.3 section)
+- v2.2 walls on real mirror/glass: 20/45 (44%); confidence cuts don't separate them (41–60%), candidate kind does
+  (depth-gap walls 6/26, wedge walls 14/19).
+- v2.3 (no depth-gap candidates) on dev: 21/33 walls (64%) on real mirrors; `A_3001` 57% / 0% crash vs map 61% / 4%
+  (p = 1) and v2.2 54%; dev encounters 50% / 10% crash vs map 40% / 40% and v2.2 33% / 11%. v2.3 is the configuration
+  for the B evaluation run.
+
 ## [Unreleased] — Robust scan, mirror encounters, FORESIGHT v2.2 (2026-11-10)
 
 ### Added

@@ -1,4 +1,4 @@
-# FORESIGHT — current state (2026-11-02, stopped on request)
+# FORESIGHT — current state (2026-11-11, stopped before the B evaluation run)
 
 Read with `PLAN.md` (the plan, revised after the lit review) and `logs/2026-11-02.md` (what was done, point by point).
 
@@ -50,7 +50,23 @@ Stages in the script, in order (~6–8 h left on the RTX 4060):
 3. `heuristic` on the key levels;
 4. structured errors (reflect, flat_tex, masked swaps) for `map` + `heuristic` on set S.
 
-## State on 2026-11-10 (stopped on request before the B evaluation run)
+## State on 2026-11-11 (stopped; the B evaluation run waits for the user)
+
+The stricter-confirmation dev test is done. Confidence thresholds didn't separate real from false mirror walls, but
+candidate kind did, so v2.3 drops depth-gap candidates (`--guard v23`). Dev: walls on real mirrors 44% → 64%; A_dev 57%
+vs map 61% (p = 1); dev encounters 50% / 10% crash vs map 40% / 40%. Details: `docs/src/foresight/planning/fast_slow.md`
+(v2.3 section), `logs/2026-11-11.md`.
+
+Next, when the user says go: the B evaluation (~7 h, VLM alone on the GPU), FORESIGHT v2.3 with Depth Anything on A, S, E:
+
+```bash
+P=/home/thisen-ekanayake/miniforge3/envs/habitat/bin/python; export DISPLAY=:1
+$P tools/run_pointnav_eval.py --set A --conditions foresight --guard v23 --depth da --out results/runs/pointnav/A
+$P tools/run_pointnav_eval.py --set S --conditions foresight --guard v23 --depth da --out results/runs/pointnav/S
+$P tools/run_pointnav_eval.py --set E --conditions foresight --guard v23 --depth da --out results/runs/pointnav/E
+```
+
+## State on 2026-11-10 (superseded)
 
 Done: robust-scan ablation, reflective-category fix + re-run, encounter set E (C's mirror stratum, non-VLM conditions),
 FORESIGHT v2.2 guard tested on the dev sets. Results in `docs/results/depth_error_A.md` and

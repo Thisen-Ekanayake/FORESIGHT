@@ -55,7 +55,8 @@ class FastSlowMirrorGuard:
                  path_m: float = 5.0, ray_m: float = 2.5, keep_s: float = 15.0, verify_timeout_s: float = 14.0,
                  align_deg: float = 8.0, banner_s: float = 3.0, same_m: float = 0.4,
                  wedge_p: float = 0.9, wedge_m: float = 3.0, wedge_pad_deg: float = 3.0,
-                 near_m: Optional[float] = None, walled_m: Optional[float] = None, gap_s: float = 0.0):
+                 near_m: Optional[float] = None, walled_m: Optional[float] = None, gap_s: float = 0.0,
+                 gap_candidates: bool = True):
         """same_m: a candidate is already handled if it lies along an existing wall or a dismissed candidate (both ends
         and its middle within same_m of it). wedge_*: a look with P(mirror) >= wedge_p also makes a "wedge" candidate
         from each mirror box: the box's bearing span from that pose, out to wedge_m; it is in the way if the route
@@ -77,7 +78,13 @@ class FastSlowMirrorGuard:
           walled_m  a candidate whose midpoint is within walled_m of an existing wall is already handled, whatever its
                     angle (v2.1 needed it to lie *along* the wall, so a mirror walled from one side was re-checked from
                     the next)
-          gap_s     at least gap_s between the end of one slow check and the start of the next"""
+          gap_s     at least gap_s between the end of one slow check and the start of the next
+
+        v2.3 (2026-11-11): gap_candidates=False makes candidates only from confident mirror boxes (wedges, P >= wedge_p),
+        never from the depth "phantom room" geometry. On the dev runs of v2.2 (annotated homes + dev encounters), 6 of 26
+        gap-based walls lay on a real mirror/glass object (within 0.6 m) against 14 of 19 box-based ones, and the
+        threshold on Laya's or the box's confidence did not separate right from wrong walls (precision 41-60% at every
+        cut) (tools/guard_precision.py)."""
         self.laya, self.worker, self.nav, self.questions = laya, worker, navigator, questions
         self.hazard_question, self.hazard_option, self.threshold = hazard_question, hazard_option, threshold
         self.path_m, self.ray_m, self.keep_s, self.verify_timeout_s = path_m, ray_m, keep_s, verify_timeout_s
@@ -96,6 +103,8 @@ class FastSlowMirrorGuard:
         if near_m is not None:
             self.path_m, self.ray_m, self.wedge_m = min(path_m, near_m), min(ray_m, near_m), min(wedge_m, near_m)
         self._last_check_end = -np.inf
+        self.gap_candidates = gap_candidates
+        self.wall_log: list = []  # one entry per confirmed wall: what the check saw (for precision analysis)
 
     def want_note(self) -> bool:
         """Asked by the worker as a look starts: describe this view? Only once facing a suspected reflection."""
@@ -186,6 +195,11 @@ class FastSlowMirrorGuard:
                 if self._p > self.threshold:
                     for c in v["cands"]:
                         self.nav.map.add_segment(c["a"], c["b"], c["fwd"])
+                        src = self.worker.results.get(c["seen"], {})
+                        self.wall_log.append({"t": t, "p_laya": self._p, "kind": c.get("kind", "gap"),
+                                              "p_box": float(src.get("present", {}).get("mirror", 0.0)),
+                                              "n_cands": len(v["cands"]), "a": np.asarray(c["a"]).tolist(),
+                                              "b": np.asarray(c["b"]).tolist()})
                     wall_added, self._wall_at, event = True, t, "confirmed"
                 else:
                     self._dismissed += [(c["a"], c["b"]) for c in v["cands"]]
@@ -193,7 +207,7 @@ class FastSlowMirrorGuard:
                 self.events.append((t, event, seen, self._p))
                 self._verify, self._last_check_end = None, t
                 continue
-            segs = self.nav.reflection_segments(seen)  # fast path: candidate walls from this look
+            segs = self.nav.reflection_segments(seen) if self.gap_candidates else []  # fast path: candidates from this look
             for a, b, f in segs:
                 if not self._known(a, b):
                     self.candidates.append({"a": a, "b": b, "fwd": f, "seen": seen, "t": t})

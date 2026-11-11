@@ -1,0 +1,290 @@
+{
+ "set": "E",
+ "seed": 9001,
+ "dataset": "data/processed/scene_datasets/hm3d/minival/hm3d_annotated_minival_basis.scene_dataset_config.json",
+ "n": 12,
+ "by_category": {
+  "mirror": 2,
+  "window": 3,
+  "closet mirror wall": 7
+ },
+ "rules": "Per large reflective pane in the 4 annotated homes:\n\n  pane     HM3D category in REFLECTIVE_CATEGORIES, horizontal extent >= 0.5 m, vertical extent >= 0.5 m, spanning the\n           camera band (0.4-1.6 m above the floor the episode is on); its thin horizontal axis is the wall normal\n  start    navigable, 1.5-4.5 m from the pane, within 45 deg of its normal, clearance >= 0.3 m; yaw facing the pane's centre\n           +- 15 deg; kept only if the rendered start view shows the pane in its centre (>= 8% of the central region;\n           the semantic image shows the nearest surface, so an occluded pane fails)\n  goal     navigable, same floor, clearance >= 0.3 m, geodesic 3-14 m, and the straight line start -> goal crosses the\n           pane: the shortest-looking way is through the mirror, as in the staged hallway-mirror trap\n  <= 4 encounters per pane, starts >= 1 m apart. Written once, committed before any run.",
+ "episodes": [
+  {
+   "start": [
+    -2.8337299823760986,
+    0.16337794065475464,
+    -7.238407135009766
+   ],
+   "goal": [
+    -1.4121742248535156,
+    0.16337794065475464,
+    -2.5252957344055176
+   ],
+   "yaw_deg": -130.8978202729585,
+   "geodesic_m": 7.086,
+   "pane_id": 577,
+   "pane_category": "mirror",
+   "pane_width_m": 1.59,
+   "start_dist_m": 1.96,
+   "pane_view_frac": 0.287,
+   "name": "e-00800-mirror577-0",
+   "scene": "00800-TEEsavR23oF",
+   "stratum": "encounter",
+   "max_sim_s": 90.7
+  },
+  {
+   "start": [
+    -2.8180465698242188,
+    2.794919967651367,
+    -7.331465721130371
+   ],
+   "goal": [
+    1.597125768661499,
+    2.794919967651367,
+    -7.1562886238098145
+   ],
+   "yaw_deg": -108.86620481414265,
+   "geodesic_m": 5.179,
+   "pane_id": 145,
+   "pane_category": "mirror",
+   "pane_width_m": 0.79,
+   "start_dist_m": 2.87,
+   "pane_view_frac": 0.11,
+   "name": "e-00802-mirror145-0",
+   "scene": "00802-wcojb4TFT35",
+   "stratum": "encounter",
+   "max_sim_s": 74.4
+  },
+  {
+   "start": [
+    7.090142726898193,
+    11.127449989318848,
+    3.3727192878723145
+   ],
+   "goal": [
+    2.473562240600586,
+    11.127449989318848,
+    -3.2460570335388184
+   ],
+   "yaw_deg": 42.81929394594315,
+   "geodesic_m": 10.027,
+   "pane_id": 770,
+   "pane_category": "window",
+   "pane_width_m": 0.51,
+   "start_dist_m": 1.95,
+   "pane_view_frac": 0.081,
+   "name": "e-00803-window770-0",
+   "scene": "00803-k1cupFYWXJ6",
+   "stratum": "encounter",
+   "max_sim_s": 115.9
+  },
+  {
+   "start": [
+    1.8303050994873047,
+    11.127449989318848,
+    -2.909078359603882
+   ],
+   "goal": [
+    4.980457305908203,
+    11.127449989318848,
+    3.012967109680176
+   ],
+   "yaw_deg": -141.64178034124978,
+   "geodesic_m": 8.077,
+   "pane_id": 780,
+   "pane_category": "window",
+   "pane_width_m": 0.61,
+   "start_dist_m": 1.72,
+   "pane_view_frac": 0.293,
+   "name": "e-00803-window780-0",
+   "scene": "00803-k1cupFYWXJ6",
+   "stratum": "encounter",
+   "max_sim_s": 99.2
+  },
+  {
+   "start": [
+    -0.7413820028305054,
+    3.327448844909668,
+    0.8992437720298767
+   ],
+   "goal": [
+    -1.7256855964660645,
+    3.327448844909668,
+    -2.4292187690734863
+   ],
+   "yaw_deg": 6.112991631509332,
+   "geodesic_m": 3.607,
+   "pane_id": 577,
+   "pane_category": "window",
+   "pane_width_m": 0.69,
+   "start_dist_m": 1.68,
+   "pane_view_frac": 0.25,
+   "name": "e-00803-window577-0",
+   "scene": "00803-k1cupFYWXJ6",
+   "stratum": "encounter",
+   "max_sim_s": 60.9
+  },
+  {
+   "start": [
+    -5.130332946777344,
+    0.06139063835144043,
+    0.3221196234226227
+   ],
+   "goal": [
+    -0.014710754156112671,
+    0.06139063835144043,
+    4.769231796264648
+   ],
+   "yaw_deg": -129.51343389724548,
+   "geodesic_m": 8.247,
+   "pane_id": 469,
+   "pane_category": "closet mirror wall",
+   "pane_width_m": 2.41,
+   "start_dist_m": 1.53,
+   "pane_view_frac": 0.223,
+   "name": "e-00808-closetmirrorwall469-0",
+   "scene": "00808-y9hTuugGdiq",
+   "stratum": "encounter",
+   "max_sim_s": 100.7
+  },
+  {
+   "start": [
+    -5.4277448654174805,
+    0.06139063835144043,
+    0.20150011777877808
+   ],
+   "goal": [
+    -0.8063685297966003,
+    0.06139063835144043,
+    4.441920757293701
+   ],
+   "yaw_deg": -115.33728958209147,
+   "geodesic_m": 7.899,
+   "pane_id": 470,
+   "pane_category": "closet mirror wall",
+   "pane_width_m": 1.84,
+   "start_dist_m": 1.52,
+   "pane_view_frac": 0.757,
+   "name": "e-00808-closetmirrorwall470-0",
+   "scene": "00808-y9hTuugGdiq",
+   "stratum": "encounter",
+   "max_sim_s": 97.7
+  },
+  {
+   "start": [
+    -5.381832122802734,
+    0.06139063835144043,
+    0.6509421467781067
+   ],
+   "goal": [
+    -2.864896774291992,
+    0.06139063835144043,
+    -0.7595095634460449
+   ],
+   "yaw_deg": -52.40985108109775,
+   "geodesic_m": 7.272,
+   "pane_id": 471,
+   "pane_category": "closet mirror wall",
+   "pane_width_m": 1.27,
+   "start_dist_m": 1.62,
+   "pane_view_frac": 0.509,
+   "name": "e-00808-closetmirrorwall471-0",
+   "scene": "00808-y9hTuugGdiq",
+   "stratum": "encounter",
+   "max_sim_s": 92.3
+  },
+  {
+   "start": [
+    -2.624112606048584,
+    0.06139063835144043,
+    0.5989741086959839
+   ],
+   "goal": [
+    7.620464324951172,
+    0.06139063835144043,
+    1.826582431793213
+   ],
+   "yaw_deg": -74.50861006889282,
+   "geodesic_m": 12.085,
+   "pane_id": 527,
+   "pane_category": "closet mirror wall",
+   "pane_width_m": 2.46,
+   "start_dist_m": 2.6,
+   "pane_view_frac": 0.56,
+   "name": "e-00808-closetmirrorwall527-0",
+   "scene": "00808-y9hTuugGdiq",
+   "stratum": "encounter",
+   "max_sim_s": 133.6
+  },
+  {
+   "start": [
+    -1.9152915477752686,
+    -2.7386093139648438,
+    3.866481065750122
+   ],
+   "goal": [
+    6.398009777069092,
+    -2.7386093139648438,
+    4.231105327606201
+   ],
+   "yaw_deg": -114.01989161168757,
+   "geodesic_m": 10.659,
+   "pane_id": 663,
+   "pane_category": "closet mirror wall",
+   "pane_width_m": 2.37,
+   "start_dist_m": 3.11,
+   "pane_view_frac": 0.23,
+   "name": "e-00808-closetmirrorwall663-0",
+   "scene": "00808-y9hTuugGdiq",
+   "stratum": "encounter",
+   "max_sim_s": 121.4
+  },
+  {
+   "start": [
+    -0.11969822645187378,
+    -2.7386093139648438,
+    4.694654941558838
+   ],
+   "goal": [
+    5.089242935180664,
+    -2.7386093139648438,
+    1.305314302444458
+   ],
+   "yaw_deg": -65.1234105809379,
+   "geodesic_m": 7.198,
+   "pane_id": 664,
+   "pane_category": "closet mirror wall",
+   "pane_width_m": 1.24,
+   "start_dist_m": 1.55,
+   "pane_view_frac": 0.447,
+   "name": "e-00808-closetmirrorwall664-0",
+   "scene": "00808-y9hTuugGdiq",
+   "stratum": "encounter",
+   "max_sim_s": 91.7
+  },
+  {
+   "start": [
+    -0.8221060037612915,
+    -2.7386093139648438,
+    4.047558784484863
+   ],
+   "goal": [
+    5.286942481994629,
+    -2.7386093139648438,
+    1.5849010944366455
+   ],
+   "yaw_deg": -58.95220754040462,
+   "geodesic_m": 7.159,
+   "pane_id": 665,
+   "pane_category": "closet mirror wall",
+   "pane_width_m": 1.15,
+   "start_dist_m": 2.14,
+   "pane_view_frac": 0.2,
+   "name": "e-00808-closetmirrorwall665-0",
+   "scene": "00808-y9hTuugGdiq",
+   "stratum": "encounter",
+   "max_sim_s": 91.4
+  }
+ ]
+}
