@@ -1,4 +1,4 @@
-# FORESIGHT — current state (2026-11-11, stopped before the B evaluation run)
+# FORESIGHT — current state (2026-11-12, B evaluation running)
 
 Read with `PLAN.md` (the plan, revised after the lit review) and `logs/2026-11-02.md` (what was done, point by point).
 
@@ -50,7 +50,17 @@ Stages in the script, in order (~6–8 h left on the RTX 4060):
 3. `heuristic` on the key levels;
 4. structured errors (reflect, flat_tex, masked swaps) for `map` + `heuristic` on set S.
 
-## State on 2026-11-11 (stopped; the B evaluation run waits for the user)
+## State on 2026-11-12 (B evaluation running, unattended)
+
+- Literature update done with Athena (`docs/lit_review/update_2026-11-12.md`): *From Depth to Safe Depth* (arXiv
+  2611.13769) is concurrent work on A; FloorScale is the per-scene calibration it doesn't try. Athena stopped
+  (`athena --stop`; restart with `athena`).
+- B evaluation started 23:43: `scripts/run_b_eval.sh` (v2.3 + DA, E → S → A, resumable, log
+  `results/runs/pointnav/b_eval.log`, per set `results/runs/pointnav/logs/b_eval_<set>.log`).
+- After B: `tools/run_detector_ablation.py` (untested until the GPU is free), e.g.
+  `python tools/run_detector_ablation.py --set E --recall 1 --fp 0 --out results/runs/pointnav/det/E`.
+
+## State on 2026-11-11 (superseded)
 
 The stricter-confirmation dev test is done. Confidence thresholds didn't separate real from false mirror walls, but
 candidate kind did, so v2.3 drops depth-gap candidates (`--guard v23`). Dev: walls on real mirrors 44% → 64%; A_dev 57%

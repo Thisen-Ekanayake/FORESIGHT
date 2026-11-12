@@ -3,6 +3,20 @@
 Notable changes to FORESIGHT, newest first. Day-by-day working notes live in `logs/` (untracked);
 milestone status in `PROGRESS.md`.
 
+## [Unreleased] — Literature update, B evaluation, detector ablation (2026-11-12)
+
+### Added
+- `docs/lit_review/update_2026-11-12.md`: second Athena pass (MCP tools) on the questions the A/C/v2.3 results raise.
+  Main finding: *From Depth to Safe Depth* (arXiv 2611.13769, 10 Nov 2026) is concurrent work on deliverable A
+  (Nav2 + Depth Anything V2 collides in 63%; trained correction head + conformal uncertainty 70% / 3%); it never tries
+  per-scene scale calibration, which FloorScale is. Also MIRA-Bench (VLMs can't tell reflections from objects),
+  slow-module scheduling as a decision problem, and a LiDAR-only literature on mirrors in navigation maps.
+- `docs/results/depth_error_A.md`: concurrent-work section with Safe Depth's near-range over-estimation metric on our
+  set-A traces: Depth Anything V2 98% raw, 11% with FloorScale (theirs: 59.8% → 12.0% with a trained head).
+- `scripts/run_b_eval.sh`: deliverable B, FORESIGHT v2.3 on E, S, A (resumable).
+- `tools/run_detector_ablation.py`: the v2.3 guard driven by a simulated mirror detector (semantic boxes, controlled
+  recall / false-box rate, always-confirming slow check), to bound what any mirror detector can buy.
+
 ## [Unreleased] — FORESIGHT v2.3: wedge-only mirror walls (2026-11-11)
 
 ### Added

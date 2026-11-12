@@ -183,3 +183,27 @@ behind a frame the scan still sees).
 Error **type** predicts navigation error far better than error **magnitude**, and the damaging types depend on how the
 navigator uses depth (calibration, per-column nearest points, map vs reactive). The real estimator's error is mostly
 the benign kind once scale is calibrated.
+
+## Concurrent work: *From Depth to Safe Depth* (arXiv 2611.13769, 10 Nov 2026)
+
+The closest published result, found in the 2026-11-12 literature update (`docs/lit_review/update_2026-11-12.md`).
+Nav2 in Gazebo procedural worlds, 120 paired episodes: Depth Anything V2 metric collides in 63% (37% success, GT 93%);
+a trained 0.58 M correction head plus conformal uncertainty reaches 70% / 3%. They reject a constant scale because
+the predicted/true ratio varies 0.8–2 across scenes, but do not try a per-scene online scale, which is what
+FloorScale is.
+
+Their depth metric, near over-estimation (fraction of readings closer than 3 m that the model over-estimates by more
+than 0.2 m), on our set-A traces (forward ray, every tick with true distance 0.1–3 m; theirs is per pixel, so the two
+are not identical):
+
+| Set A (120 episodes, map navigator) | Near over-estimation | Success / crash |
+|---|---|---|
+| Depth Anything V2, no FloorScale | 98% | 35% / 34% |
+| Depth Anything V2 + FloorScale (training-free) | 11% | 79% / 0% (n.s. vs GT) |
+| GT depth (definition floor: ray vs mesh sampling) | 2% | 83% / 0% |
+| *Safe Depth* (Gazebo): DA-V2 raw → trained head µ | 59.8% → 12.0% | 37% / 63% → 60% / 15% (70% / 3% with σ) |
+
+On scanned HM3D homes a per-scene floor-based scale removes about as much near over-estimation as their trained
+head does in procedural worlds, without training. This is a contrast across simulators and planners, not a
+head-to-head. What remains after FloorScale is structured (mirrors, glass), as H-A says, and as their glass group
+(37% at best vs 94% with GT) also shows.
