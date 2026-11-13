@@ -40,6 +40,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # Evaluation sets (drawn with the clearance rule, committed before any run) and the first draws, kept as dev sets for
 # developing/tuning: the pilot and any fix found on it run there, never on A/S.
+EDGE_EXTEND_M = 1.0  # v2.4: a wall from a mirror box touching the image border is extended this far on that side
 SETS = {"A": "experiments/configs/pointnav/episodes_A_3003.json", "S": "experiments/configs/pointnav/episodes_S_3004.json",
         "A_dev": "experiments/configs/pointnav/episodes_A_3001.json", "S_dev": "experiments/configs/pointnav/episodes_S_3002.json",
         # mirror/glass encounters for deliverable C (tools/make_encounter_episodes.py): start facing a pane, goal through it
@@ -127,16 +128,28 @@ def build(cond, e, args, start_xz, goal_xz):
         from foresight.perception.vlm.qwen_vl import GROUNDING_NAMES, PRESENT_PROMPT, REFLECTION_AWARE_PROMPT
         from foresight.planning.fast_slow import FastSlowMirrorGuard
         from foresight.planning.object_search import PerceptionWorker
-        vlm, laya = model("vlm"), model("laya")
+        vlm = model("vlm")
+        laya = model("laya") if args.guard != "fill" else None
         present = lambda rgb, lab: vlm.option_probs(rgb, PRESENT_PROMPT.format(name=GROUNDING_NAMES.get(lab, lab)), ["yes", "no"])[0]
         when = []
         worker = PerceptionWorker(lambda rgb, lab: vlm.locate(rgb, lab), labels=lambda: [],
                                   describe=lambda rgb: vlm.describe(rgb, prompt=REFLECTION_AWARE_PROMPT, max_new_tokens=args.vlm_tokens),
                                   present=present, extra_labels=["mirror"], describe_when=lambda: when[0]())
         nav = MapNavigator(worker=worker, **nav_kw)
-        v22 = dict(near_m=1.5, walled_m=0.8, gap_s=5.0) if args.guard in ("v22", "v23") else {}  # see the guard's docstring
-        if args.guard == "v23":
+        if args.guard == "fill":  # FORESIGHT v3: mirror boxes re-fill the depth, no slow check, no walls
+            from foresight.planning.fast_slow import BoxFillGuard
+            guard = BoxFillGuard(worker, nav, hold_s=args.fill_hold_s)
+            when.append(guard.want_note)
+
+            def decide(rgb, depth, bearing, t, pose):
+                lin, ang, d = guard.step(rgb, depth, bearing, t, pose)
+                return lin, ang, _lean(d)
+            return decide, guard
+        v22 = dict(near_m=1.5, walled_m=0.8, gap_s=5.0) if args.guard in ("v22", "v23", "v24") else {}  # see the guard's docstring
+        if args.guard in ("v23", "v24"):
             v22["gap_candidates"] = False
+        if args.guard == "v24":
+            v22["edge_extend_m"] = EDGE_EXTEND_M
         guard = FastSlowMirrorGuard(laya, worker, nav, threshold=args.threshold, **v22)
         when.append(guard.want_note)
 
@@ -250,7 +263,7 @@ def run_one(args, e, cond, depth_spec, out_json: Path):
     if cond == "foresight":
         rec.update(guard=args.guard, walls_on_reflective=x.get("walls_on_reflective"), wall_log=x.get("wall_log"), slow_looks=ctl.n_slow_looks, mirror_events=[list(map(lambda v: v if not isinstance(v, float) else round(v, 2), ev))
                                                                   for ev in ctl.events],
-                   walls=len(ctl.nav.map.walls), look_latency_s_median=float(np.median(ctl.worker.latencies_s or [0.0])))
+                   walls=len(ctl.nav.map.walls), filled_ticks=getattr(ctl, "n_filled", None), look_latency_s_median=float(np.median(ctl.worker.latencies_s or [0.0])))
     out_json.write_text(json.dumps(rec, indent=1, default=float))
     np.savez_compressed(out_json.with_suffix(".npz"), t=ep.times, pos=ep.positions,
                         linear=np.array([st["linear_velocity"] for st in s]),
@@ -282,7 +295,8 @@ def main():
     p.add_argument("--no-floor-scale", action="store_true", help="use depth as given (no floor-plane self-calibration)")
     p.add_argument("--robust-scan", action="store_true", help="map navigators: noise-robust depth scan (median + support)")
     p.add_argument("--threshold", type=float, default=0.6)
-    p.add_argument("--guard", choices=["v21", "v22", "v23"], default="v22", help="foresight: mirror guard version")
+    p.add_argument("--fill-hold-s", type=float, default=3.0, help="--guard fill: how long a confident mirror box is used")
+    p.add_argument("--guard", choices=["v21", "v22", "v23", "v24", "fill"], default="v22", help="foresight: mirror guard version")
     p.add_argument("--vlm-tokens", type=int, default=96)
     args = p.parse_args()
     eps = json.loads(Path(SETS[args.set]).read_text())["episodes"]
@@ -294,7 +308,7 @@ def main():
     jobs = [(e, c, d) for e in eps for c in args.conditions for d in args.depth]
     jobs = jobs[args.shard::args.nshards]
     tag = "_".join(t for t, on in (("nofs", args.no_floor_scale), ("robust", args.robust_scan),
-                                   (args.guard, args.guard != "v22" and "foresight" in args.conditions)) if on)
+                                   (args.guard + (f"{args.fill_hold_s:g}" if args.guard == "fill" else ""), args.guard != "v22" and "foresight" in args.conditions)) if on)
     print(f"{len(jobs)} jobs (shard {args.shard}/{args.nshards})", flush=True)
     for e, c, d in jobs:
         out = Path(args.out) / (c + (f"_{tag}" if tag else "")) / slug(d)

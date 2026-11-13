@@ -1,4 +1,4 @@
-# FORESIGHT — current state (2026-11-12, B evaluation running)
+# FORESIGHT — current state (2026-11-13, B done)
 
 Read with `PLAN.md` (the plan, revised after the lit review) and `logs/2026-11-02.md` (what was done, point by point).
 
@@ -50,7 +50,19 @@ Stages in the script, in order (~6–8 h left on the RTX 4060):
 3. `heuristic` on the key levels;
 4. structured errors (reflect, flat_tex, masked swaps) for `map` + `heuristic` on set S.
 
-## State on 2026-11-12 (B evaluation running, unattended)
+## State on 2026-11-13 (B done)
+
+- **B is done**: `docs/results/foresight_B.md`. v2.3 vs the map navigator (DA), paired: E 48% vs 64% (crashes 15% vs
+  25%), S 67% vs 71%, A 70% vs 79% (p = 0.039); pooled −25/+10 (p = 0.017). Negative result for the VLM guard as built.
+- Detector ablation (`det/E`, `det/E_dev`): with an oracle detector v2.3 gets 15% on E (85% timeouts): the walls are
+  the bottleneck. Depth re-fill from the mirror's border (`fill:da@reflective[_box]`) with the oracle: 88% / 85%.
+- FORESIGHT v3 (`--guard fill`, VLM boxes re-fill depth): E 62% / 31% crash, no gain; the 2B VLM says "no mirror"
+  once the mirror fills the view. Not run on S/A.
+- Next options (none started): a dedicated RGB mirror segmenter feeding `MirrorFillDepth` (weights via the finsight
+  VM); world-tracked mirror boxes; then S/A for whichever variant pays on E_dev → E. Deliverable C (stratified
+  profile) can be written from existing runs. Athena restarted at the end of the session.
+
+## State on 2026-11-12 (superseded)
 
 - Literature update done with Athena (`docs/lit_review/update_2026-11-12.md`): *From Depth to Safe Depth* (arXiv
   2611.13769) is concurrent work on A; FloorScale is the per-scene calibration it doesn't try. Athena stopped

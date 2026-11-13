@@ -3,6 +3,28 @@
 Notable changes to FORESIGHT, newest first. Day-by-day working notes live in `logs/` (untracked);
 milestone status in `PROGRESS.md`.
 
+## [Unreleased] — B results, detector ablation, mirror depth fill, FORESIGHT v3 (2026-11-13)
+
+### Results (`docs/results/foresight_B.md`)
+- B evaluation of v2.3 (E 33, S 64, A 120 episodes, paired with the map navigator on Depth Anything V2): success
+  E 48% vs 64% (crash 15% vs 25%), S 67% vs 71% (crash 0% vs 4%), A 70% vs 79% (p = 0.039); pooled −25/+10,
+  p = 0.017. Losses are timeouts from false walls on the route; 3.4 slow checks per episode outside encounters.
+- Detector ablation on E: with an oracle mirror detector the v2.3 guard succeeds in 15% (0% crashes, 85% timeouts):
+  its walls, not the VLM, are the bottleneck. Re-filling the mirror's depth from the depth below it on the oracle
+  mask gives 88% / 8% crashes, on the oracle box 85% / 4% (map alone 65% / 27%).
+- FORESIGHT v3 (VLM boxes re-fill the depth) on E: 62% / 31% crashes, no better than the map navigator; all crashes
+  with the view > 90% mirror, where Qwen3-VL-2B answers "no mirror". A first v3 run never filled (0.6 s box-age limit
+  vs 1.5–2.7 s grounding looks); kept as `E/foresight_fill_bug_noop`, not a result.
+
+### Added
+- `perception/depth/sources.py`: `MirrorFillDepth` / `fill_from_border` and depth specs `fill:da@reflective`,
+  `fill:da@reflective_box` (column-wise re-fill of mirror regions from their lower/upper border, DA's own values).
+- `planning/fast_slow.py:BoxFillGuard`, `run_pointnav_eval.py --guard fill --fill-hold-s`: FORESIGHT v3, VLM mirror
+  boxes re-fill the depth (held 3 s, shifted by the robot's turn); no slow check, no walls.
+- `FastSlowMirrorGuard(edge_extend_m=)` / `--guard v24`: walls from boxes at the image border extended; no effect
+  with the oracle on E_dev, kept off.
+- `run_detector_ablation.py`: `--guard v23|v24`, `--max-sim-s`; `scripts/run_det_ablation.sh`.
+
 ## [Unreleased] — Literature update, B evaluation, detector ablation (2026-11-12)
 
 ### Added

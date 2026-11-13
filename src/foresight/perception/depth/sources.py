@@ -5,6 +5,8 @@ The depth-error-propagation study (deliverable A, PLAN.md) holds the navigation 
   da                     Depth Anything V2 (the real zero-shot estimator)
   gt                     simulator ground-truth depth: the spec's depth-sensor baseline
   gt:<errors>            ground truth with controlled, injected error (`InjectedDepth`)
+  fill:<base>@reflective <base> with each mirror/glass region re-filled from the depth just below/above it
+                         (`MirrorFillDepth`; @reflective_box fills the region's bounding box instead)
   mix:<base>@<mask>      one source everywhere, the other inside a pixel mask (`MaskedSwapDepth`): e.g. ground truth
                          with Depth Anything's own error only on reflective pixels, which isolates how much of the
                          estimator's navigation failure comes from those pixels
@@ -220,6 +222,78 @@ class MaskedSwapDepth(DepthSource):
         return out
 
 
+class MirrorFillDepth(DepthSource):
+    """`base` depth with each reflective region re-filled from the surface it sits in, using only `base`'s own values.
+
+    A mirror/glass pane is (almost always) part of a vertical plane, and for a vertical plane seen by a level pinhole
+    camera depth is constant down each image column. So each column of a region takes the median base depth of a short
+    band just *below* it (the floor where a closet mirror meets it, or the wall under a hanging mirror: the same plane),
+    or, if the region reaches the bottom of the image, just above it; columns with neither borrow the nearest filled
+    column of the same region. Something standing in front of the mirror (a sink) makes the fill nearer, the safe side.
+
+    region: 'mask' fills the semantic mask's pixels (an oracle mirror *segmenter*); 'box' fills each connected region's
+    bounding box (an oracle mirror *box detector*, what Qwen3-VL's grounding gives). Ground truth never enters the
+    depth: the semantic annotation only says where the mirror is. 2026-11-13, after the detector ablation showed the
+    v2.3 guard's walls block routes even with a perfect detector (docs/results/foresight_B.md)."""
+
+    def __init__(self, base: DepthSource, region: str = "mask", band=(2, 8)):
+        self.base, self.region, self.band = base, region, band
+        self.name = f"fill:{base.name}@reflective" + ("_box" if region == "box" else "")
+        self.reflective: Optional[np.ndarray] = None
+
+    def reset(self, sim=None, seed: int = 0):
+        self.base.reset(sim, seed)
+        if sim is not None:
+            self.reflective = reflective_ids(sim)
+
+    def __call__(self, rgb, obs):
+        from scipy.ndimage import find_objects, label
+        d = self.base(rgb, obs)
+        m = np.isin(_resize_nearest(obs["semantic"], d.shape), self.reflective)
+        if not m.any():
+            return d
+        lab, _ = label(m)
+        regions = []
+        for i, sl in enumerate(find_objects(lab), start=1):
+            reg = (lab[sl] == i) if self.region == "mask" else np.ones(lab[sl].shape, bool)
+            if reg.sum() >= 20:
+                regions.append((sl, reg))
+        return fill_from_border(d, regions, m, self.band)
+
+
+def fill_from_border(d: np.ndarray, regions, exclude: np.ndarray, band=(2, 8)) -> np.ndarray:
+    """Re-fill each region of a depth image column by column from the depth just below it (else just above it), as
+    `MirrorFillDepth` describes. regions: [(slice pair, bool array of that slice's shape)]; exclude: pixels never used
+    as a border (the mirrors themselves)."""
+    out = d.copy()
+    h = d.shape[0]
+    b0, b1 = band
+    for sl, reg in regions:
+        ys, xs = sl
+        fill = np.full(xs.stop - xs.start, np.nan)
+        for j, x in enumerate(range(xs.start, xs.stop)):
+            rows = np.nonzero(reg[:, j])[0]
+            if not len(rows):
+                continue
+            lo, hi = ys.start + rows.max() + 1, ys.start + rows.min()  # first row below, top row of the region
+            for r0, r1 in ((lo + b0, lo + b1), (hi - b1, hi - b0)):  # band below, then band above
+                r0, r1 = max(r0, 0), min(r1, h)
+                if r1 <= r0:
+                    continue
+                v = d[r0:r1, x][(d[r0:r1, x] > 0) & ~exclude[r0:r1, x]]
+                if len(v):
+                    fill[j] = float(np.median(v))
+                    break
+        ok = np.isfinite(fill)
+        if not ok.any():
+            continue
+        idx = np.arange(len(fill))
+        fill = np.interp(idx, idx[ok], fill[ok])  # columns with no border: nearest filled ones
+        block = out[sl]
+        block[reg] = np.broadcast_to(fill, reg.shape)[reg]
+    return out
+
+
 def make_source(spec: str, estimator=None, latency_ms: float = 0.0) -> DepthSource:
     """'da' | 'gt' | 'gt:scale=1.5,noise=0.1' | 'mix:gt@reflective=da' | 'mix:da@reflective=gt' (also @textureless)."""
     if spec == "da":
@@ -228,6 +302,9 @@ def make_source(spec: str, estimator=None, latency_ms: float = 0.0) -> DepthSour
         return GroundTruthDepth(latency_ms)
     if spec.startswith("gt:"):
         return InjectedDepth(ErrorSpec.parse(spec[3:]), latency_ms)
+    if spec.startswith("fill:"):
+        base, region = spec[5:].split("@")
+        return MirrorFillDepth(make_source(base, estimator, latency_ms), "box" if region == "reflective_box" else "mask")
     if spec.startswith("mix:"):
         outside, rest = spec[4:].split("@")
         mask, inside = rest.split("=")

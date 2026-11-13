@@ -56,7 +56,7 @@ class FastSlowMirrorGuard:
                  align_deg: float = 8.0, banner_s: float = 3.0, same_m: float = 0.4,
                  wedge_p: float = 0.9, wedge_m: float = 3.0, wedge_pad_deg: float = 3.0,
                  near_m: Optional[float] = None, walled_m: Optional[float] = None, gap_s: float = 0.0,
-                 gap_candidates: bool = True):
+                 gap_candidates: bool = True, edge_extend_m: float = 0.0, edge_px: float = 20.0):
         """same_m: a candidate is already handled if it lies along an existing wall or a dismissed candidate (both ends
         and its middle within same_m of it). wedge_*: a look with P(mirror) >= wedge_p also makes a "wedge" candidate
         from each mirror box: the box's bearing span from that pose, out to wedge_m; it is in the way if the route
@@ -84,7 +84,13 @@ class FastSlowMirrorGuard:
         never from the depth "phantom room" geometry. On the dev runs of v2.2 (annotated homes + dev encounters), 6 of 26
         gap-based walls lay on a real mirror/glass object (within 0.6 m) against 14 of 19 box-based ones, and the
         threshold on Laya's or the box's confidence did not separate right from wrong walls (precision 41-60% at every
-        cut) (tools/guard_precision.py)."""
+        cut) (tools/guard_precision.py).
+
+        v2.4 (2026-11-13), off by default (edge_extend_m=0 is v2.3): a mirror box that reaches the left or right image
+        border (within edge_px of 1000) is a mirror that continues out of view, so its wall is extended edge_extend_m
+        past that end. On the encounter set E, all four v2.3 crashes were at long 00808 closet mirror walls that had a
+        confirmed wall on them; the robot hit the mirror 0.5-1.4 m beyond the wall's end (pre-crash view > 90%
+        mirror)."""
         self.laya, self.worker, self.nav, self.questions = laya, worker, navigator, questions
         self.hazard_question, self.hazard_option, self.threshold = hazard_question, hazard_option, threshold
         self.path_m, self.ray_m, self.keep_s, self.verify_timeout_s = path_m, ray_m, keep_s, verify_timeout_s
@@ -104,6 +110,7 @@ class FastSlowMirrorGuard:
             self.path_m, self.ray_m, self.wedge_m = min(path_m, near_m), min(ray_m, near_m), min(wedge_m, near_m)
         self._last_check_end = -np.inf
         self.gap_candidates = gap_candidates
+        self.edge_extend_m, self.edge_px = edge_extend_m, edge_px
         self.wall_log: list = []  # one entry per confirmed wall: what the check saw (for precision analysis)
 
     def want_note(self) -> bool:
@@ -136,8 +143,9 @@ class FastSlowMirrorGuard:
         from foresight.planning.local_map import _rotate
         ends = [pos + _rotate(fwd, np.array(x)) * d for x in (a1, a2)]
         u = (ends[1] - ends[0]) / max(np.linalg.norm(ends[1] - ends[0]), 1e-6)
+        ext = [self.edge_extend_m if box[0] <= self.edge_px else 0.0, self.edge_extend_m if box[2] >= 1000 - self.edge_px else 0.0]
         return {"kind": "wedge", "pos": pos, "fwd": fwd, "b1": a1 - self.wedge_pad, "b2": a2 + self.wedge_pad,
-                "a": ends[0] - u * 0.2, "b": ends[1] + u * 0.2, "seen": seen}
+                "a": ends[0] - u * (0.2 + ext[0]), "b": ends[1] + u * (0.2 + ext[1]), "seen": seen}
 
     def _in_wedge(self, c, q) -> bool:
         v = np.asarray(q, float) - c["pos"]
@@ -257,3 +265,82 @@ class FastSlowMirrorGuard:
             "vlm_progress": self.worker.progress(t),
             **nav,
         }
+
+
+class BoxFillGuard:
+    """FORESIGHT v3 (2026-11-13): fix the depth, not the map. Each tick, if the latest delivered look (no older than
+    max_age_s) says P(mirror) >= p_min, every mirror box it gave is re-filled in this tick's depth image from the depth
+    just below/above it (`perception.depth.sources.fill_from_border`: a mirror sits in a vertical plane, so depth is
+    constant down each column), and the navigator maps that depth as usual. No slow check, no permanent wall: a false
+    box bends the depth only while it is reported, and free-space carving undoes it afterwards.
+
+    Motivation: with a perfect (oracle) mirror detector the v2.3 guard succeeded in 15% of the mirror encounters (85%
+    timeouts: its fixed-depth walls blocked the way around), while re-filling the oracle mask's depth this way is
+    what a mirror detector should buy (docs/results/foresight_B.md)."""
+
+    def __init__(self, worker, navigator, p_min: float = 0.9, hold_s: float = 3.0, pad: float = 0.03):
+        """hold_s: a confident look's boxes are used for up to hold_s after the frame was seen, shifted across the
+        image by how far the robot has turned since (bearing-only: translation ignored). Needed because a look that
+        finds a mirror also runs grounding (1.5-2.7 s, against 0.17 s for a "no"), and because Qwen3-VL-2B mostly
+        answers "no mirror" once a closet mirror fills the view (P ~ 0.001, e-00808-closetmirrorwall527-0), so the
+        box from the approach must carry the robot through the last metres."""
+        self.worker, self.nav, self.p_min, self.hold_s, self.pad = worker, navigator, p_min, hold_s, pad
+        self.n_filled = 0
+        self.events: list = []
+        self.n_slow_looks = 0  # no slow module; kept for the runner's records
+        self.wall_log: list = []
+
+    def want_note(self) -> bool:
+        return False
+
+    @staticmethod
+    def _shift(box, turn):
+        """A 0-1000 box seen `turn` rad of heading ago -> where those bearings are in the current image (90 deg hfov),
+        clipped to the image; None if it has left the view."""
+        def x_to_b(x):
+            return np.arctan((x / 1000 - 0.5) * 2)
+
+        def b_to_x(b):
+            return (np.tan(np.clip(b, -1.5, 1.5)) / 2 + 0.5) * 1000
+        b1, b2 = x_to_b(box[0]) + turn, x_to_b(box[2]) + turn
+        if b2 < -np.pi / 4 or b1 > np.pi / 4:
+            return None
+        return [float(np.clip(b_to_x(b1), 0, 1000)), box[1], float(np.clip(b_to_x(b2), 0, 1000)), box[3]]
+
+    def _regions(self, boxes, shape):
+        h, w = shape
+        out = []
+        for x1, y1, x2, y2 in boxes:
+            c0, c1 = int(max(0.0, x1 / 1000 - self.pad) * w), int(min(1.0, x2 / 1000 + self.pad) * w)
+            r0, r1 = int(max(0.0, y1 / 1000) * h), int(min(1.0, y2 / 1000) * h)
+            if c1 - c0 >= 2 and r1 - r0 >= 2:
+                out.append(((slice(r0, r1), slice(c0, c1)), np.ones((r1 - r0, c1 - c0), bool)))
+        return out
+
+    def step(self, rgb: np.ndarray, depth: np.ndarray, goal_bearing_rad: float, t: float, pose: dict):
+        from foresight.perception.depth.sources import fill_from_border
+        background_ms = self.worker.poll(rgb, t)
+        fwd = np.asarray(pose["forward_xz"], float)
+        filled = False
+        conf = [k for k, r in self.worker.results.items() if t - k <= self.hold_s
+                and r.get("present", {}).get("mirror", 0.0) >= self.p_min and r.get("boxes", {}).get("mirror")]
+        if conf:
+            seen = max(conf)
+            f0 = self.nav.scans[seen][1] if seen in self.nav.scans else fwd
+            turn = float(np.arctan2(f0[1], f0[0]) - np.arctan2(fwd[1], fwd[0]))
+            turn = (turn + np.pi) % (2 * np.pi) - np.pi
+            boxes = [self._shift(b, turn) for b in self.worker.results[seen]["boxes"]["mirror"]]
+            regions = self._regions([b for b in boxes if b is not None], depth.shape)
+            if regions:
+                excl = np.zeros(depth.shape, bool)
+                for sl, reg in regions:
+                    excl[sl] = True
+                depth = fill_from_border(depth, regions, excl)
+                filled = True
+        self.n_filled += filled
+        linear, angular, nav = self.nav.step(depth, pose, t)
+        return linear, angular, {"background_ms": background_ms, "laya_infer_ms": 0.0, "laya_roundtrip_ms": 0.0,
+                                 "laya_called": False, "p_hazard": 0.0, "probabilities": None, "hazard": filled,
+                                 "verifying": False, "verify_aligned": False, "event": "filled" if filled else None,
+                                 "wall_added": False, "description": None, "description_seen_at": None,
+                                 "candidates": [], "vlm_progress": self.worker.progress(t), **nav}

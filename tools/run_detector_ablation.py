@@ -13,7 +13,8 @@ median look latency, 0.17 s) and each slow-check description --describe-s (an as
 description on the RTX 4060 takes about 3 s).
 
   python tools/run_detector_ablation.py --set E --recall 1 --fp 0 --out results/runs/pointnav/det/E
-Outputs <out>/r<recall>_fp<fp>/foresight_v23/<depth>/<episode>.json, read by summarize_pointnav.py / guard_precision.py.
+--guard v24 runs the v2.4 guard (walls from boxes at the image border extended). Outputs
+<out>/r<recall>_fp<fp>/foresight_<guard>/<depth>/<episode>.json, read by summarize_pointnav.py / guard_precision.py.
 """
 import argparse
 import hashlib
@@ -67,11 +68,13 @@ def main():
     p.add_argument("--min-area", type=float, default=0.01, help="smallest region boxed, as a share of the frame")
     p.add_argument("--look-s", type=float, default=0.17)
     p.add_argument("--describe-s", type=float, default=3.0)
+    p.add_argument("--guard", choices=["v23", "v24"], default="v23")
     p.add_argument("--depth", default="da")
     p.add_argument("--out", required=True)
     p.add_argument("--shard", type=int, default=0)
     p.add_argument("--nshards", type=int, default=1)
     p.add_argument("--episodes", nargs="*", default=None)
+    p.add_argument("--max-sim-s", type=float, default=None, help="cap sim time (smoke tests); default per episode")
     a = p.parse_args()
 
     from foresight.planning.fast_slow import FastSlowMirrorGuard
@@ -111,7 +114,7 @@ def main():
         worker_ref.append(worker)
         nav = MapNavigator(worker=worker, **_nav_kw(e, args, start_xz, goal_xz))
         guard = FastSlowMirrorGuard(ConfirmAll(), worker, nav, threshold=0.6, near_m=1.5, walled_m=0.8, gap_s=5.0,
-                                    gap_candidates=False)
+                                    gap_candidates=False, edge_extend_m=R.EDGE_EXTEND_M if a.guard == "v24" else 0.0)
         when.append(guard.want_note)
 
         def decide(rgb, depth, bearing, t, pose):
@@ -124,13 +127,13 @@ def main():
         return decide, guard
     R.build = build
 
-    args = argparse.Namespace(set=a.set, size=640, success_m=0.36, contact_m=0.3, max_linear_mps=0.35, max_sim_s=None,
-                              no_floor_scale=False, robust_scan=False, threshold=0.6, guard="v23", vlm_tokens=96)
+    args = argparse.Namespace(set=a.set, size=640, success_m=0.36, contact_m=0.3, max_linear_mps=0.35, max_sim_s=a.max_sim_s,
+                              no_floor_scale=False, robust_scan=False, threshold=0.6, guard=a.guard, vlm_tokens=96)
     eps = R.json.loads(Path(R.SETS[a.set]).read_text())["episodes"]
     if a.episodes:
         eps = [e for e in eps if e["name"] in set(a.episodes)]
     eps = eps[a.shard::a.nshards]
-    out = Path(a.out) / f"r{a.recall:g}_fp{a.fp:g}" / "foresight_v23" / R.slug(a.depth)
+    out = Path(a.out) / f"r{a.recall:g}_fp{a.fp:g}" / f"foresight_{a.guard}" / R.slug(a.depth)
     out.mkdir(parents=True, exist_ok=True)
     print(f"{len(eps)} episodes -> {out}", flush=True)
     for e in eps:
