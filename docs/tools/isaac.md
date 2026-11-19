@@ -67,11 +67,31 @@ afterwards on the saved frames, because Isaac and the models don't fit in 8 GB t
 
 ```bash
 /ml/isaac-sim/python.sh tools/isaac/mirror_test.py --out results/isaac/mirror_test --renderer PathTracing --spp 32
+# the walk-up again for the chase view only (the side camera starts inside a wall before ~5.6 s)
+/ml/isaac-sim/python.sh tools/isaac/mirror_test.py --out results/isaac/mirror_test_corner --renderer PathTracing \
+    --spp 32 --chase corner --t-to 5.7
 $PY tools/isaac/mirror_test_perception.py results/isaac/mirror_test
 /ml/isaac-sim/python.sh tools/isaac/phantom_room.py --run results/isaac/mirror_test --out results/isaac/phantom
 $PY tools/make_mirror_test_video.py --run results/isaac/mirror_test --phantom results/isaac/phantom \
     --out results/isaac/foresight_mirror_test.mp4
 ```
+
+Rendered 2026-11-19: 751 frames of the choreography (H1 tracking error median 12 cm), 191 corner-camera frames of the
+walk-up (7 cm), a 456-frame Phantom Room orbit (24 fps, 1.5-7 s/frame as the points appear), and the video:
+`results/isaac/foresight_mirror_test.mp4`, 2:13, 1920×1920, Kokoro am_michael voice-over.
+
+Findings and limits (one scripted encounter, not an evaluation):
+- DA V2 reads the mirror too far on every frame (+0.9 to +1.5 m, median +1.3 m).
+- Qwen3-VL-2B: P(mirror) 0.91 beyond 2.1 m, 0.37 within 1.5 m; P(robot) 0.97; "is that robot me, in a mirror?"
+  never above 0.38. Close up it describes the reflection as "a black sculpture with 'Unitree' written on it".
+- Walk-in test: Qwen's robot box grows ×3.0 from 2.3 m to 0.8 m from the glass; a reflection predicts ×2.7, a robot
+  standing still ×1.5 (median error 5% vs 19%). Turning is no position cue: under pure rotation a reflection and a
+  still object shift alike.
+- The mirror fill (oracle mask) lands within ~0.15 m of the glass while the mirror's base is in view; within ~1.5 m
+  the mirror reaches the image bottom and the fill lands ~0.8 m behind it. The Phantom Room uses frames 0–100 only.
+- The H1 policy barely side-steps (planned ±0.35 m, got 11 cm): no lateral test. The perception frames come from the
+  main render; the walk-up chase view from a second run of the same script (same choreography, a few cm apart).
+- Isaac can hang on exit holding ~5 GB of GPU memory: kill the `kit/python` process by PID before the next job.
 
 Cost on the RTX 4060 laptop: path tracing at 32 spp, 1920×1080 chase + 640×640 head camera, ~4.3 s per frame
 (675 frames for the 22.5 s choreography). Real-time mode (RaytracedLighting) renders the reflected robot as a black
