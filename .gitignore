@@ -10,3 +10,4 @@ PROGRESS.md
 *.pdf
 *.png
 .venv-laya/
+/isaac_assets/
