@@ -1,7 +1,7 @@
 """Find every file the downloaded NVIDIA scenes/robots reference but that isn't in the local asset mirror, and fetch it
 (other Isaac folders such as shared materials or props). Repeats until nothing is missing.
 
-  /ml/isaac-sim/python.sh tools/isaac/check_asset_deps.py <asset_root> <usd>...
+  /ml/IsaacLab/env_isaaclab/bin/python tools/isaac/check_asset_deps.py <asset_root> <usd>...
 
 Run on the workstation after copying the folder made by tools/isaac/download_isaac_assets.sh.
 """
