@@ -3,6 +3,29 @@
 Notable changes to FORESIGHT, newest first. Day-by-day working notes live in `logs/` (untracked);
 milestone status in `PROGRESS.md`.
 
+## [Unreleased] — The Mirror Test: Isaac Sim humanoid demo (2026-11-19)
+
+### Added
+- `tools/isaac/house_stage.py`: shared Isaac stage builder (HM3D house, mirror material, lights, floor collider,
+  cameras) with a scan-texture emission scale and dollhouse cuts (height cut, footprint box).
+- `tools/isaac/mirror_test.py`: a Unitree H1 humanoid walks up to the 00808 hallway mirror, path traced (its head
+  camera sees its own reflection); saves chase + head camera + Isaac ground-truth depth + mirror mask per frame.
+  `--chase side|behind|corner`, `--robot h1|go2`, `--emission`.
+- `tools/isaac/mirror_test_perception.py`: DA V2 (× FloorScale) and Qwen3-VL-2B on those frames afterwards; the
+  walk-in self-motion test (box growth vs a reflection and a robot standing still); raw and mirror-filled point clouds.
+- `tools/isaac/phantom_room.py`: path-traced dollhouse orbit with DA's mirror depth as a point cloud (the phantom
+  room) folding onto the glass under `fill_from_border`.
+- `foresight.viz.mirror_test_video`, `tools/make_mirror_test_video.py`: narrated 1920×1920 video
+  (`results/isaac/foresight_mirror_test.mp4`); every number computed from the run files.
+
+### Results (one scripted encounter, not an evaluation; `docs/tools/isaac.md`)
+- DA V2 reads the mirror too far on all 751 frames (+0.9 to +1.5 m, median +1.3 m).
+- Qwen3-VL-2B P(mirror) 0.91 beyond 2.1 m, 0.37 within 1.5 m (71% of looks below 0.5); sees a robot (P 0.97) but
+  never judges it to be itself (P(self) ≤ 0.38).
+- Walk-in test: Qwen's robot box grew ×3.0 from 2.3 m to 0.8 m from the glass; reflection predicts ×2.7, a robot
+  standing still ×1.5.
+- The mirror fill lands on the glass while the mirror's base is in view; within ~1.5 m it lands ~0.8 m behind it.
+
 ## [Unreleased] — B results, detector ablation, mirror depth fill, FORESIGHT v3 (2026-11-13)
 
 ### Results (`docs/results/foresight_B.md`)

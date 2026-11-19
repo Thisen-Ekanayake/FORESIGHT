@@ -49,3 +49,30 @@ Nothing else may hold the GPU while Isaac Sim runs (8 GB).
 - A replay: the Go2's body plays no part in the decisions, and the head camera is at Go2 height (~0.4 m), not the
   1.5 m camera the run was decided with.
 - Scan artifacts (holes, stretched texels) show more under RTX lighting than in Habitat's flat shading.
+
+# The Mirror Test demo (2026-11-19)
+
+A Unitree H1 humanoid (Isaac Sim's `H1FlatTerrainPolicy`) walks up to the full-height hallway mirror of 00808
+(mirror115/116, the plane x ≈ -0.1 in Isaac's frame) and moves in front of it, path traced, so its head camera sees its
+own reflection, something Habitat can't show (no robot body, baked mirrors). Scripted, not a closed loop: the models run
+afterwards on the saved frames, because Isaac and the models don't fit in 8 GB together.
+
+| Step | Env | What it does |
+|---|---|---|
+| `tools/isaac/house_stage.py` | Isaac | Shared stage building (house meshes, mirror material, lights, floor collider, cameras), with a scan-texture emission scale (0.25 here: the 2026-11-01 replay's 1.0 flattened the lighting) and dollhouse cuts (height cut, footprint box). |
+| `tools/isaac/mirror_test.py` | Isaac | The choreography (approach from 2.5 m, look, turn ±28°, side-step ±0.35 m, walk in to 0.4 m where the mirror fills the view). Saves the chase view, the 640×640 90° level head camera (1.52 m, near Habitat's 1.5 m), Isaac's ground-truth depth and the mirror mask (instance segmentation) per frame. |
+| `tools/isaac/mirror_test_perception.py` | habitat | DA V2 (×FloorScale at the head height) vs ground truth; every 3rd frame Qwen3-VL-2B: P(mirror) with FORESIGHT's yes/no prompt, P(robot), P("that robot is me, in a mirror"), grounding boxes for robot and mirror, a description per phase. The self-motion test: the image position a reflection would have vs a second robot standing still, from the camera poses, against Qwen's robot box. Back-projects DA depth (raw and mirror-filled with `fill_from_border` on the oracle mask) into `phantom.npz`. |
+| `tools/isaac/phantom_room.py` | Isaac | Path-traced orbit of a cut-away of the room with the point cloud: the mirror pixels as DA reads them (a room behind the wall, red), then sliding to the filled depth (cyan). |
+| `tools/make_mirror_test_video.py` | habitat | Narrated 1920×1920 video (`foresight.viz.mirror_test_video`); every spoken number is computed from the files above. |
+
+```bash
+/ml/isaac-sim/python.sh tools/isaac/mirror_test.py --out results/isaac/mirror_test --renderer PathTracing --spp 32
+$PY tools/isaac/mirror_test_perception.py results/isaac/mirror_test
+/ml/isaac-sim/python.sh tools/isaac/phantom_room.py --run results/isaac/mirror_test --out results/isaac/phantom
+$PY tools/make_mirror_test_video.py --run results/isaac/mirror_test --phantom results/isaac/phantom \
+    --out results/isaac/foresight_mirror_test.mp4
+```
+
+Cost on the RTX 4060 laptop: path tracing at 32 spp, 1920×1080 chase + 640×640 head camera, ~4.3 s per frame
+(675 frames for the 22.5 s choreography). Real-time mode (RaytracedLighting) renders the reflected robot as a black
+silhouette (reflections get no lighting there); path tracing lights it.
