@@ -2,6 +2,8 @@
 (other Isaac folders such as shared materials or props). Repeats until nothing is missing.
 
   /ml/isaac-sim/python.sh tools/isaac/check_asset_deps.py <asset_root> <usd>...
+
+Run on the workstation after copying the folder made by tools/isaac/download_isaac_assets.sh.
 """
 import os
 import subprocess
