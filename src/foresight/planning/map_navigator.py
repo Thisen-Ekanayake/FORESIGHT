@@ -22,7 +22,7 @@ class MapNavigator:
                  max_linear_accel: float = 0.4, max_linear_decel: float = 1.5,
                  max_angular_accel: float = np.deg2rad(120.0), replan_look: bool = True, plan_kw: Optional[dict] = None,
                  floor_scale: bool = True, worker=None, escape: bool = False, escape_after_s: float = 2.0,
-                 escape_s: float = 1.2, escape_mps: float = 0.15, robust_scan: bool = False):
+                 escape_s: float = 1.2, escape_mps: float = 0.15, robust_scan: bool = False, cam_height_m: float = 1.5):
         """look_around_s: spin in place (~360 deg at max_angular_radps) to seed the map, the usual start of an
         exploration run; both conditions do it. The same look is repeated when the route suddenly reverses
         (a new obstacle closed the way it was heading: look before committing to a long detour) or the robot
@@ -39,10 +39,13 @@ class MapNavigator:
         (point-goal pilot, a-00800-02 with ground-truth depth: 109 s without moving, 2026-11-02). Off by default, so
         object search keeps its evaluated behaviour. robust_scan: `local_map.depth_scan(robust=True)` (median-filtered
         depth, a column's range needs supporting points), which removes the phantom obstacles zero-mean depth noise
-        makes in the plain nearest-point scan. Off by default: deliverable A's results use the plain scan."""
+        makes in the plain nearest-point scan. Off by default: deliverable A's results use the plain scan.
+        cam_height_m: the camera's height over the floor (Habitat runs: 1.5 m; the Isaac G1's head camera is lower);
+        FloorScale and the depth scan both use it."""
         self.goal = np.asarray(goal_xz, float)
         self.map = OccupancyMap(np.asarray(map_center_xz, float), size_m=map_size_m)
-        self.scale = FloorScale()
+        self.cam_h = cam_height_m
+        self.scale = FloorScale(cam_height_m=cam_height_m)
         self.use_floor_scale = floor_scale
         self.worker = worker
         self.max_linear_mps, self.max_angular_radps, self.heading_gain = max_linear_mps, max_angular_radps, heading_gain
@@ -72,7 +75,7 @@ class MapNavigator:
         creep_mps: while facing, drive straight at this speed once within 15 deg of face_xz (closing in on an
         object; the safety layer still applies)."""
         s = self.scale.update(depth) if self.use_floor_scale else 1.0
-        bearings, ranges = depth_scan(depth, s, robust=self.robust_scan)
+        bearings, ranges = depth_scan(depth, s, robust=self.robust_scan, cam_height_m=self.cam_h)
         pos = np.asarray(pose["position"], float)[[0, 2]]
         fwd = np.asarray(pose["forward_xz"], float)
         self.map.integrate(pos, fwd, bearings, ranges)

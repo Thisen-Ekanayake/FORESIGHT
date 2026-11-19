@@ -278,13 +278,16 @@ class BoxFillGuard:
     timeouts: its fixed-depth walls blocked the way around), while re-filling the oracle mask's depth this way is
     what a mirror detector should buy (docs/results/foresight_B.md)."""
 
-    def __init__(self, worker, navigator, p_min: float = 0.9, hold_s: float = 3.0, pad: float = 0.03):
+    def __init__(self, worker, navigator, p_min: float = 0.9, hold_s: float = 3.0, pad: float = 0.03,
+                 labels=("mirror",)):
         """hold_s: a confident look's boxes are used for up to hold_s after the frame was seen, shifted across the
         image by how far the robot has turned since (bearing-only: translation ignored). Needed because a look that
         finds a mirror also runs grounding (1.5-2.7 s, against 0.17 s for a "no"), and because Qwen3-VL-2B mostly
         answers "no mirror" once a closet mirror fills the view (P ~ 0.001, e-00808-closetmirrorwall527-0), so the
-        box from the approach must carry the robot through the last metres."""
+        box from the approach must carry the robot through the last metres. labels: the grounded labels whose boxes
+        are filled (the worker must ground them as extra labels), e.g. ("mirror", "glass wall") in a glass office."""
         self.worker, self.nav, self.p_min, self.hold_s, self.pad = worker, navigator, p_min, hold_s, pad
+        self.labels = tuple(labels)
         self.n_filled = 0
         self.events: list = []
         self.n_slow_looks = 0  # no slow module; kept for the runner's records
@@ -322,14 +325,17 @@ class BoxFillGuard:
         background_ms = self.worker.poll(rgb, t)
         fwd = np.asarray(pose["forward_xz"], float)
         filled = False
-        conf = [k for k, r in self.worker.results.items() if t - k <= self.hold_s
-                and r.get("present", {}).get("mirror", 0.0) >= self.p_min and r.get("boxes", {}).get("mirror")]
+        def confident(r):
+            return [lab for lab in self.labels
+                    if r.get("present", {}).get(lab, 0.0) >= self.p_min and r.get("boxes", {}).get(lab)]
+        conf = [k for k, r in self.worker.results.items() if t - k <= self.hold_s and confident(r)]
         if conf:
             seen = max(conf)
             f0 = self.nav.scans[seen][1] if seen in self.nav.scans else fwd
             turn = float(np.arctan2(f0[1], f0[0]) - np.arctan2(fwd[1], fwd[0]))
             turn = (turn + np.pi) % (2 * np.pi) - np.pi
-            boxes = [self._shift(b, turn) for b in self.worker.results[seen]["boxes"]["mirror"]]
+            res = self.worker.results[seen]
+            boxes = [self._shift(b, turn) for lab in confident(res) for b in res["boxes"][lab]]
             regions = self._regions([b for b in boxes if b is not None], depth.shape)
             if regions:
                 excl = np.zeros(depth.shape, bool)

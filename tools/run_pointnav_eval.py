@@ -93,8 +93,9 @@ def frame_stats_fn(semantic: bool):
     return stats, bind
 
 
-def build(cond, e, args, start_xz, goal_xz):
-    """-> decide(rgb, depth, bearing, t, pose), controller (for meta)."""
+def build(cond, e, args, start_xz, goal_xz, nav_extra=None):
+    """-> decide(rgb, depth, bearing, t, pose), controller (for meta). nav_extra: extra MapNavigator arguments (the
+    Isaac G1 runs pass cam_height_m); args.hazard_labels (default ["mirror"]): what the fill guard grounds and fills."""
     from foresight.planning.depth_heuristic import DepthOnlyHeuristicController
     from foresight.planning.local_map import FloorScale
     from foresight.planning.map_navigator import MapNavigator
@@ -116,7 +117,9 @@ def build(cond, e, args, start_xz, goal_xz):
     center = (start_xz + goal_xz) / 2
     size = float(max(16.0, 2 * np.linalg.norm(goal_xz - start_xz) + 12.0))
     nav_kw = dict(goal_xz=goal_xz, map_center_xz=center, map_size_m=size, max_linear_mps=v, max_angular_radps=w,
-                  safety=safety(), floor_scale=not args.no_floor_scale, escape=True, robust_scan=args.robust_scan)
+                  safety=safety(), floor_scale=not args.no_floor_scale, escape=True, robust_scan=args.robust_scan,
+                  **(nav_extra or {}))
+    hazards = list(getattr(args, "hazard_labels", None) or ["mirror"])
     if cond == "map":
         nav = MapNavigator(**nav_kw)
 
@@ -134,11 +137,11 @@ def build(cond, e, args, start_xz, goal_xz):
         when = []
         worker = PerceptionWorker(lambda rgb, lab: vlm.locate(rgb, lab), labels=lambda: [],
                                   describe=lambda rgb: vlm.describe(rgb, prompt=REFLECTION_AWARE_PROMPT, max_new_tokens=args.vlm_tokens),
-                                  present=present, extra_labels=["mirror"], describe_when=lambda: when[0]())
+                                  present=present, extra_labels=hazards, describe_when=lambda: when[0]())
         nav = MapNavigator(worker=worker, **nav_kw)
         if args.guard == "fill":  # FORESIGHT v3: mirror boxes re-fill the depth, no slow check, no walls
             from foresight.planning.fast_slow import BoxFillGuard
-            guard = BoxFillGuard(worker, nav, hold_s=args.fill_hold_s)
+            guard = BoxFillGuard(worker, nav, hold_s=args.fill_hold_s, labels=hazards)
             when.append(guard.want_note)
 
             def decide(rgb, depth, bearing, t, pose):
