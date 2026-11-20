@@ -72,16 +72,26 @@ class Qwen3VLSceneReasoner:
     `qwen3_vl` architecture works with the installed transformers 4.57.6.
     """
 
-    def __init__(self, model_name: str = DEFAULT_MODEL, device: str | None = None):
+    def __init__(self, model_name: str = DEFAULT_MODEL, device: str | None = None, quant: str | None = None):
+        """quant: None (bf16, every evaluated run) or "8bit" (bitsandbytes LLM.int8, ~2.5 GB instead of ~4.4 GB), for
+        sharing the 8 GB GPU with Isaac Sim in the live G1 runs; also set by FORESIGHT_VLM_QUANT=8bit."""
+        import os
+        quant = quant or os.environ.get("FORESIGHT_VLM_QUANT") or None
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.processor = AutoProcessor.from_pretrained(model_name)
-        self.model = (
-            Qwen3VLForConditionalGeneration.from_pretrained(
-                model_name, dtype=torch.bfloat16 if self.device == "cuda" else torch.float32
+        if quant == "8bit":
+            from transformers import BitsAndBytesConfig
+            self.model = Qwen3VLForConditionalGeneration.from_pretrained(
+                model_name, dtype=torch.bfloat16, device_map={"": 0},
+                quantization_config=BitsAndBytesConfig(load_in_8bit=True)).eval()
+        else:
+            self.model = (
+                Qwen3VLForConditionalGeneration.from_pretrained(
+                    model_name, dtype=torch.bfloat16 if self.device == "cuda" else torch.float32
+                )
+                .to(self.device)
+                .eval()
             )
-            .to(self.device)
-            .eval()
-        )
 
     @torch.inference_mode()
     def describe(

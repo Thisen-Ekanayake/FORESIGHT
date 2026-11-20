@@ -60,6 +60,7 @@ parser.add_argument("--pt-updates", type=int, default=6, help="app updates per p
 parser.add_argument("--set-mode", default="cfg", choices=["cfg", "ref"],
                     help="cfg: scene via Isaac Lab's scene config; ref: referenced onto the stage after env creation")
 parser.add_argument("--warmup", type=int, default=300, help="render this many frames first (RTX streams big scenes in)")
+parser.add_argument("--physics-device", default="cuda:0", help="cpu frees GPU memory for the brain's VLM")
 parser.add_argument("--realtime-render", action="store_true", help="RTX real-time for the head camera (default)")
 args, _ = parser.parse_known_args()
 
@@ -110,7 +111,7 @@ def yaw_quat_xyzw(yaw):
 
 
 # ---------------------------------------------------------------- env config: Isaac Lab's own G1 flat (play) env
-cfg = parse_env_cfg(TASK, device="cuda:0", num_envs=1)
+cfg = parse_env_cfg(TASK, device=args.physics_device, num_envs=1)
 cfg.scene.num_envs = 1
 cfg.scene.env_spacing = 0.0
 cfg.scene.robot.spawn.usd_path = f"{A}/Isaac/IsaacLab/Robots/Unitree/G1/g1.usd"
@@ -134,6 +135,15 @@ cmd.rel_heading_envs = 0.0
 cmd.debug_vis = False
 cfg.observations.policy.enable_corruption = False
 cfg.sim.render_interval = cfg.decimation  # render once per control step
+# PhysX's GPU buffers default to sizes for thousands of parallel training robots (~2.5 GB); one robot needs a sliver,
+# and the freed memory lets the brain keep Qwen3-VL on the same 8 GB GPU.
+_px = cfg.sim.physics
+for _k, _v in dict(gpu_max_rigid_contact_count=2**19, gpu_max_rigid_patch_count=2**16, gpu_found_lost_pairs_capacity=2**18,
+                   gpu_found_lost_aggregate_pairs_capacity=2**20, gpu_total_aggregate_pairs_capacity=2**18,
+                   gpu_collision_stack_size=2**24, gpu_heap_capacity=2**24, gpu_temp_buffer_capacity=2**22,
+                   gpu_max_soft_body_contacts=2**10, gpu_max_particle_contacts=2**10).items():
+    if hasattr(_px, _k):
+        setattr(_px, _k, _v)
 # the scene: NVIDIA's USD (with its own colliders); the terrain plane stays as the physics floor
 if args.scene != "none" and args.set_mode == "cfg":
     usd, off = SCENES[args.scene]
@@ -187,9 +197,9 @@ if args.scene != "none" and os.environ.get("G1_HIDE_GROUND", "1") == "1":  # hid
             UsdGeom.Imageable(p).MakeInvisible()
 # NVIDIA's pretrained actor (rsl_rl 5 format): MLP 123 -> 256 -> 128 -> 128 -> 37, ELU, no observation
 # normalization; deterministic action = the MLP's mean.
-_sd = torch.load(CKPT, map_location="cuda:0", weights_only=False)["actor_state_dict"]
+_sd = torch.load(CKPT, map_location=args.physics_device, weights_only=False)["actor_state_dict"]
 policy = torch.nn.Sequential(torch.nn.Linear(123, 256), torch.nn.ELU(), torch.nn.Linear(256, 128), torch.nn.ELU(),
-                             torch.nn.Linear(128, 128), torch.nn.ELU(), torch.nn.Linear(128, 37)).to("cuda:0").eval()
+                             torch.nn.Linear(128, 128), torch.nn.ELU(), torch.nn.Linear(128, 37)).to(args.physics_device).eval()
 policy.load_state_dict({k[len("mlp."):]: v for k, v in _sd.items() if k.startswith("mlp.")})
 
 
@@ -383,7 +393,8 @@ while t_sim[0] < args.max_sim_s:
               f"  wall {time.time() - w0:.0f} s", flush=True)
     dt = max(0.1, r["tick_ms"] / 1000.0)
     for _ in range(max(1, int(round(dt / dt_ctrl)))):
-        obs = control_step(r["linear"], r["angular"], obs)
+        # FORESIGHT: angular > 0 = turn right (foresight.sim.velocity_step); Isaac yaw rate > 0 = turn left
+        obs = control_step(r["linear"], -r["angular"], obs)
     if contact_t is not None and t_sim[0] - contact_t > args.after_contact_s:
         break
 
