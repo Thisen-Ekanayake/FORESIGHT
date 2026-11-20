@@ -32,7 +32,7 @@ sys.path.insert(0, HERE)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--assets", default=os.path.join(ROOT, "isaac_assets"), help="local mirror of the asset root")
-parser.add_argument("--scene", default="office", choices=["office", "hospital", "warehouse", "dtw", "hm3d", "none"])
+parser.add_argument("--scene", default="office", choices=["office", "hospital", "warehouse", "dtw", "hm3d", "cube", "hm3d_nocoll", "hm3d_nomat", "none"])
 parser.add_argument("--start", nargs=3, type=float, default=[0.0, 0.0, 0.0], metavar=("X", "Y", "YAW_DEG"))
 parser.add_argument("--goal", nargs=2, type=float, default=[4.0, 0.0], metavar=("X", "Y"))
 parser.add_argument("--cond", default="foresight", choices=["map", "foresight"], help="map = depth-only (the ghost)")
@@ -48,12 +48,33 @@ parser.add_argument("--out", required=True)
 parser.add_argument("--probe", nargs="*", type=float, default=None, metavar="V W SECONDS",
                     help="no brain: walk v m/s, w rad/s for SECONDS (default 0.5 0.0 6) and save stills")
 parser.add_argument("--port", type=int, default=47011)
+parser.add_argument("--chase", nargs=6, type=float, default=None, metavar=("EX", "EY", "EZ", "TX", "TY", "TZ"),
+                    help="probe: also render a 1920x1080 still from this eye toward this target (world coords)")
+parser.add_argument("--pt", action="store_true", help="path tracing for the stills (slow); default RTX real-time")
+parser.add_argument("--spp", type=int, default=32)
+parser.add_argument("--rendering-mode", default="quality", choices=["performance", "balanced", "quality"])
+parser.add_argument("--iso", type=float, default=0.0, help="film ISO (exposure); 0 = auto exposure")
+parser.add_argument("--extra-lights", default="auto", help="'auto' (per-scene set), 'none'")
+parser.add_argument("--light-scale", type=float, default=1.0)
+parser.add_argument("--pt-updates", type=int, default=6, help="app updates per path-traced still")
+parser.add_argument("--set-mode", default="cfg", choices=["cfg", "ref"],
+                    help="cfg: scene via Isaac Lab's scene config; ref: referenced onto the stage after env creation")
+parser.add_argument("--warmup", type=int, default=300, help="render this many frames first (RTX streams big scenes in)")
 parser.add_argument("--realtime-render", action="store_true", help="RTX real-time for the head camera (default)")
 args, _ = parser.parse_known_args()
 
 from isaaclab.app import AppLauncher  # noqa: E402
 
-app = AppLauncher(headless=True, enable_cameras=True).app
+_kit_args = os.environ.get("G1_KIT_ARGS", "")
+_kit_args += (" --/rtx/post/histogram/enabled=true" if args.iso <= 0 else f" --/rtx/post/tonemap/filmIso={args.iso}")
+if args.pt:  # choose the renderer at launch (setting it after startup hung the app)
+    _kit_args += (f" --/rtx/rendermode=PathTracing --/rtx/pathtracing/spp={args.spp}"
+                  f" --/rtx/pathtracing/totalSpp={args.spp} --/rtx/pathtracing/optixDenoiser/enabled=true")
+_render_cfg = dict(renderer="PathTracing" if args.pt else "RealTimePathTracing", samples_per_pixel_per_frame=args.spp,
+                   denoiser=True, max_bounces=6, max_specular_transmission_bounces=8, sync_loads=True)
+app = AppLauncher(headless=True, enable_cameras=True, kit_args=_kit_args.strip(), rendering_mode=args.rendering_mode,
+                  **_render_cfg,
+                  experience=os.environ.get("G1_EXPERIENCE", "/ml/isaac-sim/apps/isaacsim.exp.base.python.kit")).app
 
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
@@ -64,9 +85,7 @@ import isaaclab_tasks  # noqa: E402,F401
 from isaaclab.assets import AssetBaseCfg  # noqa: E402
 from isaaclab.envs import ManagerBasedRLEnv  # noqa: E402
 from isaaclab.sensors import CameraCfg  # noqa: E402
-from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper  # noqa: E402
-from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry, parse_env_cfg  # noqa: E402
-from rsl_rl.runners import OnPolicyRunner  # noqa: E402
+from isaaclab_tasks.utils.parse_cfg import parse_env_cfg  # noqa: E402
 
 import wire  # noqa: E402
 
@@ -77,6 +96,9 @@ SCENES = {  # usd, (x, y, z) offset applied to the scene
     "warehouse": (f"{A}/Isaac/Environments/Simple_Warehouse/full_warehouse.usd", (0, 0, 0)),
     "dtw": (f"{A}/Isaac/Environments/Digital_Twin_Warehouse/small_warehouse_digital_twin.usd", (0, 0, 0)),
     "hm3d": (os.path.join(ROOT, "results/isaac/00808_collision.usd"), (0, 0, 0)),
+    "cube": (os.path.join(ROOT, "results/isaac/cube_test.usda"), (0, 0, 0)),
+    "hm3d_nocoll": (os.path.join(ROOT, "results/isaac/00808_nocoll.usd"), (0, 0, 0)),
+    "hm3d_nomat": (os.path.join(ROOT, "results/isaac/00808_nomat.usd"), (0, 0, 0)),
 }
 TASK = "Isaac-Velocity-Flat-G1-Play-v0"
 CKPT = f"{A}/Isaac/IsaacLab/PretrainedCheckpoints/rsl_rl/Isaac-Velocity-Flat-G1-v0/checkpoint.pt"
@@ -113,31 +135,129 @@ cmd.debug_vis = False
 cfg.observations.policy.enable_corruption = False
 cfg.sim.render_interval = cfg.decimation  # render once per control step
 # the scene: NVIDIA's USD (with its own colliders); the terrain plane stays as the physics floor
-if args.scene != "none":
+if args.scene != "none" and args.set_mode == "cfg":
     usd, off = SCENES[args.scene]
     cfg.scene.stage_set = AssetBaseCfg(prim_path="/World/Set", spawn=sim_utils.UsdFileCfg(usd_path=usd),
                                        init_state=AssetBaseCfg.InitialStateCfg(pos=off))
-# head camera: a level, stabilized camera at head height (FORESIGHT assumes a level pinhole camera)
-cfg.scene.head_cam = CameraCfg(
-    prim_path="/World/HeadCam", update_period=0.0, height=640, width=640,
-    data_types=["rgb", "distance_to_image_plane"],
-    spawn=sim_utils.PinholeCameraCfg(focal_length=10.5, horizontal_aperture=20.955, clipping_range=(0.05, 100.0)))
-
 env = ManagerBasedRLEnv(cfg)
-if args.scene != "none":  # hide the terrain plane's visual where a scene provides its own floor
+if args.scene != "none" and args.set_mode == "ref":
+    from pxr import Gf, UsdGeom
+    usd, off = SCENES[args.scene]
+    _p = env.sim.stage.DefinePrim("/World/Set", "Xform")
+    _p.GetReferences().AddReference(usd)
+    if any(off):
+        UsdGeom.XformCommonAPI(_p).SetTranslate(Gf.Vec3d(*off))
+if args.scene != "none":
+    # NVIDIA's scenes keep their ceiling lights inside USD instances, which RTX doesn't light from: un-instance just
+    # the instances that contain a light, so the scene is lit as designed.
+    from pxr import Usd, UsdLux
+    _roots = set()
+    for _p in Usd.PrimRange(env.sim.stage.GetPrimAtPath("/World"), Usd.TraverseInstanceProxies()):
+        if _p.IsInstanceProxy() and _p.HasAPI(UsdLux.LightAPI):
+            _a = _p.GetParent()
+            while _a and not _a.IsInstance():
+                _a = _a.GetParent()
+            if _a:
+                _roots.add(str(_a.GetPath()))
+    for _r in _roots:
+        env.sim.stage.GetPrimAtPath(_r).SetInstanceable(False)
+    print(f"un-instanced {len(_roots)} prims holding lights", flush=True)
+# Extra soft ceiling panels (lighting only, no geometry): NVIDIA's office leaves its glass meeting rooms dark, so the
+# glass reads as black instead of glass. (x0, y0, x1, y1) areas get a grid of downward rect lights at z = 2.7 m.
+EXTRA_LIGHTS = {"office": [(-10.6, 35.5, -5.4, 48.5), (-16.5, 34.5, -11.4, 49.0)]}
+if args.extra_lights == "auto" and args.scene in EXTRA_LIGHTS:
+    from pxr import Gf, UsdGeom, UsdLux
+    _n = 0
+    for (x0, y0, x1, y1) in EXTRA_LIGHTS[args.scene]:
+        for xx in np.arange(x0 + 1.2, x1, 2.4):
+            for yy in np.arange(y0 + 1.2, y1, 2.4):
+                L = UsdLux.RectLight.Define(env.sim.stage, f"/World/ExtraLights/L{_n}")
+                L.CreateWidthAttr(1.2)
+                L.CreateHeightAttr(1.2)
+                L.CreateIntensityAttr(9000.0 * args.light_scale)
+                L.CreateColorAttr(Gf.Vec3f(1.0, 0.96, 0.9))
+                UsdGeom.Xformable(L.GetPrim()).AddTranslateOp().Set(Gf.Vec3d(float(xx), float(yy), 2.7))
+                _n += 1
+    print(f"extra ceiling lights: {_n}", flush=True)
+if args.scene != "none" and os.environ.get("G1_HIDE_GROUND", "1") == "1":  # hide the terrain plane's visual where a scene provides its own floor
     from pxr import UsdGeom
     stage = env.sim.stage
     for p in stage.Traverse():
         if str(p.GetPath()).startswith("/World/ground") and p.IsA(UsdGeom.Gprim):
             UsdGeom.Imageable(p).MakeInvisible()
-venv = RslRlVecEnvWrapper(env)
-agent_cfg = load_cfg_from_registry(TASK.replace("-Play", ""), "rsl_rl_cfg_entry_point")
-runner = OnPolicyRunner(venv, agent_cfg.to_dict(), log_dir=None, device="cuda:0")
-runner.load(CKPT)
-policy = runner.get_inference_policy(device="cuda:0")
+# NVIDIA's pretrained actor (rsl_rl 5 format): MLP 123 -> 256 -> 128 -> 128 -> 37, ELU, no observation
+# normalization; deterministic action = the MLP's mean.
+_sd = torch.load(CKPT, map_location="cuda:0", weights_only=False)["actor_state_dict"]
+policy = torch.nn.Sequential(torch.nn.Linear(123, 256), torch.nn.ELU(), torch.nn.Linear(256, 128), torch.nn.ELU(),
+                             torch.nn.Linear(128, 128), torch.nn.ELU(), torch.nn.Linear(128, 37)).to("cuda:0").eval()
+policy.load_state_dict({k[len("mlp."):]: v for k, v in _sd.items() if k.startswith("mlp.")})
+
+
+class _Env:
+    """Minimal stepping wrapper: policy observations in, joint-position actions out (as Isaac Lab's rsl_rl wrapper)."""
+
+    def get_observations(self):
+        return env.observation_manager.compute()["policy"]
+
+    def step(self, act):
+        obs, rew, term_, trunc, extras = env.step(act)
+        return obs["policy"], rew, term_, extras
+
+
+venv = _Env()
 
 robot = env.scene["robot"]
-cam = env.scene["head_cam"]
+
+
+class RepCam:
+    """A USD camera with Replicator annotators (the Kit RTX path that renders textured/MDL materials; Isaac Lab 3's
+    camera sensor showed only the dome light once a textured scene was in the stage)."""
+
+    def __init__(self, path, w, h, focal, depth=False):
+        import omni.replicator.core as rep
+        from pxr import Gf, UsdGeom
+        self.Gf = Gf
+        cam = UsdGeom.Camera.Define(env.sim.stage, path)
+        cam.CreateFocalLengthAttr(focal)
+        cam.CreateHorizontalApertureAttr(20.955)
+        cam.CreateVerticalApertureAttr(20.955 * h / w)
+        cam.CreateClippingRangeAttr(Gf.Vec2f(0.05, 200.0))
+        x = UsdGeom.Xformable(cam.GetPrim())
+        x.ClearXformOpOrder()
+        self.op = x.AddTransformOp()
+        rp = rep.create.render_product(path, resolution=(w, h))
+        self.rgb = rep.AnnotatorRegistry.get_annotator("rgb")
+        self.rgb.attach(rp)
+        self.depth = None
+        if depth:
+            self.depth = rep.AnnotatorRegistry.get_annotator("distance_to_image_plane")
+            self.depth.attach(rp)
+        self.w, self.h = w, h
+
+    def look_at(self, eye, target):
+        z = np.asarray(eye, float) - np.asarray(target, float)
+        z /= np.linalg.norm(z) + 1e-9
+        xx = np.cross([0.0, 0.0, 1.0], z)
+        xx /= np.linalg.norm(xx) + 1e-9
+        y = np.cross(z, xx)
+        self.op.Set(self.Gf.Matrix4d(*xx, 0.0, *y, 0.0, *z, 0.0, *np.asarray(eye, float), 1.0))
+
+    def grab(self, updates=2):
+        for _ in range(updates):
+            app.update()
+        img = np.asarray(self.rgb.get_data())
+        for _ in range(20):
+            if img.ndim == 3 and img.shape[0] == self.h:
+                break
+            app.update()
+            img = np.asarray(self.rgb.get_data())
+        rgb = np.ascontiguousarray(img[..., :3]).astype(np.uint8)
+        d = np.asarray(self.depth.get_data(), np.float32).reshape(self.h, self.w) if self.depth is not None else None
+        return rgb, d
+
+
+head = RepCam("/World/HeadCam", 640, 640, 10.5, depth=True)
+chase = RepCam("/World/ChaseCam", 1920, 1080, 18.0) if args.chase is not None else None
 term = env.command_manager.get_term("base_velocity")
 dt_ctrl = env.step_dt  # 0.02 s
 print(f"G1: {len(robot.joint_names)} joints, control dt {dt_ctrl:.3f} s, scene {args.scene}", flush=True)
@@ -173,12 +293,8 @@ def look():
     pos, yaw, _ = root_pose()
     f = np.array([math.cos(yaw), math.sin(yaw), 0.0])
     cpos = np.array([pos[0], pos[1], args.cam_height]) + f * 0.10
-    cam.set_world_poses(torch.tensor([cpos], dtype=torch.float32, device="cuda:0"),
-                        torch.tensor([yaw_quat_xyzw(yaw)], dtype=torch.float32, device="cuda:0"), convention="world")
-    env.sim.render()
-    cam.update(0.0, force_recompute=True)
-    rgb = cam.data.output["rgb"][0].cpu().numpy()[..., :3].astype(np.uint8)
-    depth = cam.data.output["distance_to_image_plane"][0].cpu().numpy().squeeze().astype(np.float32)
+    head.look_at(cpos, cpos + f)
+    rgb, depth = head.grab(updates=args.pt_updates if args.pt else 2)
     return rgb, depth, cpos, yaw
 
 
@@ -186,6 +302,21 @@ def to_habitat(p):
     return [float(p[0]), float(p[2] if len(p) > 2 else 0.0), float(-p[1])]
 
 
+_w0 = time.time()
+import omni.usd  # noqa: E402
+_ctx = omni.usd.get_context()
+for k in range(600):  # pump the Kit app until the stage reports everything (payloads, textures) loaded
+    app.update()
+    _msg, _done, _total = _ctx.get_stage_loading_status()
+    if k % 50 == 0:
+        print(f"  loading {k}: {_done}/{_total} {_msg}", flush=True)
+    if _total == 0 and k > 30:
+        break
+for k in range(args.warmup):  # let RTX load the scene's geometry and materials before any frame is used
+    app.update()
+    if k % 100 == 99:
+        _r, _d, _, _ = look()
+        print(f"  warm-up {k + 1}: depth ahead {np.median(_d[260:380, 220:420]):.2f} m, {time.time() - _w0:.0f} s", flush=True)
 obs = venv.get_observations()
 for _ in range(50):  # settle: stand for 1 s
     obs = control_step(0.0, 0.0, obs)
@@ -195,9 +326,13 @@ if args.probe is not None:
     n = int(secs / dt_ctrl)
     for k in range(n):
         obs = control_step(v, w, obs)
-        if k % 50 == 0:
+        if k % 50 == 0 or k == n - 1:
             rgb, depth, cpos, yaw = look()
             Image.fromarray(rgb).save(os.path.join(args.out, f"probe_{k:04d}.jpg"), quality=92)
+            if chase is not None and (k == n - 1 or k == 0):
+                chase.look_at(args.chase[:3], args.chase[3:])
+                crgb, _ = chase.grab(updates=args.pt_updates if args.pt else 3)
+                Image.fromarray(crgb).save(os.path.join(args.out, f"chase_{k:04d}.jpg"), quality=94)
             pos, yaw, _ = root_pose()
             print(f"  t {t_sim[0]:5.2f} pos {pos.round(2)} yaw {math.degrees(yaw):6.1f} "
                   f"depth ahead {np.median(depth[260:380, 220:420]):.2f} m", flush=True)
