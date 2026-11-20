@@ -31,7 +31,8 @@ import numpy as np  # noqa: E402
 import wire  # noqa: E402
 
 KEEP = ("depth_scale", "depth_ahead_m", "safety_level", "min_clearance_m", "looking_around", "escaping",
-        "background_ms", "event", "hazard", "vlm_progress", "plan_path", "plan_cost")
+        "background_ms", "event", "hazard", "vlm_progress", "plan_path", "plan_cost", "p_hazard", "verifying",
+        "wall_added", "description", "description_seen_at", "laya_called")
 
 
 def jsonable(x):
@@ -59,15 +60,69 @@ class Brain:
                                fill_hold_s=h.get("fill_hold_s", 3.0), threshold=0.6, vlm_tokens=60,
                                hazard_labels=h.get("hazard_labels", ["mirror"]))
         start, goal = np.asarray(h["start_xz"], float), np.asarray(h["goal_xz"], float)
-        self.decide, self.ctl = rpe.build(h["cond"], {}, args, start, goal,
-                                          nav_extra={"cam_height_m": float(h["cam_height_m"])})
+        if h["cond"] == "foresight_v1":
+            # FORESIGHT v1, exactly as the 2026-10-29 mirror-trap demo (tools/run_mirror_trap_demo.py): Qwen3-VL describes
+            # in the background with the reflection-aware prompt, Laya reads each note, a flagged view is checked again
+            # and walled off on the map navigator's own map.
+            from foresight.perception.vlm.qwen_vl import REFLECTION_AWARE_PROMPT
+            from foresight.planning.laya_client import LayaClient
+            from foresight.planning.laya_fusion import BackgroundDescriber, ForesightNavigator
+            from foresight.planning.map_navigator import MapNavigator
+            vlm = rpe.model("vlm")
+            if getattr(self, "_laya", None) is None:
+                self._laya = LayaClient(model="models/laya").__enter__()
+                self._laya.predict("warmup", {"q": {"type": "noul", "instructions": "warmup"}})
+            describer = BackgroundDescriber(
+                lambda rgb: vlm.describe(rgb, prompt=REFLECTION_AWARE_PROMPT, max_new_tokens=96))
+            # Confirmed mirror walls are impassable here (plan_kw virtual_cost): with the default obstacle cost the
+            # planner crossed its own wall into depth's phantom free space beyond the mirror (2026-11-20 G1 run).
+            nav = MapNavigator(goal, (start + goal) / 2, max_linear_mps=h.get("max_linear_mps", 0.35),
+                               cam_height_m=float(h["cam_height_m"]),
+                               plan_kw={"virtual_cost": 1e6} if h.get("hard_walls", True) else None)
+            ctl = ForesightNavigator(self._laya, describer, nav, threshold=0.6)
+            self.decide, self.ctl = ctl.step, ctl
+        else:
+            self.decide, self.ctl = rpe.build(h["cond"], {}, args, start, goal,
+                                              nav_extra={"cam_height_m": float(h["cam_height_m"])})
         self.log = {"header": h, "ticks": []}
+        self.hsim = None
+        if h.get("habitat_scene"):  # perception from Habitat's render of the same scan at the robot's pose
+            import habitat_sim
+            from make_pointnav_episodes import ANNOTATED, scene_ref
+            from foresight.sim.sensors import make_sim_config
+            if getattr(self, "_hsim_scene", None) != h["habitat_scene"]:
+                if getattr(self, "_hsim", None) is not None:
+                    self._hsim.close()
+                self._hsim = habitat_sim.Simulator(make_sim_config(str(ANNOTATED), scene_ref(ANNOTATED, h["habitat_scene"]),
+                                                                   640, 640, sensor_uuids=("rgb", "depth")))
+                self._hsim_scene = h["habitat_scene"]
+            self.hsim = self._hsim
+            self.floor_y = float(h.get("habitat_floor_y", 0.0))
         self.log_path = h.get("log_path")
         print(f"reset: {h['cond']} start {start.round(2)} goal {goal.round(2)} cam {h['cam_height_m']:.2f} m "
               f"labels {args.hazard_labels}", flush=True)
 
+    def habitat_view(self, h):
+        """Render the head camera in Habitat: camera at the given xz, h["cam_height_m"] over the scan's floor, level,
+        facing forward_xz (Habitat frame). Habitat's sensor sits 1.5 m above the agent."""
+        import habitat_sim
+        import quaternion  # noqa: F401
+        from habitat_sim.utils.common import quat_from_angle_axis
+        fx, fz = h["forward_xz"]
+        st = habitat_sim.AgentState()
+        st.position = np.array([h["position"][0], self.floor_y + float(h["cam_height_m"]) - 1.5, h["position"][2]], np.float32)
+        st.rotation = quat_from_angle_axis(float(np.arctan2(-fx, -fz)), np.array([0.0, 1.0, 0.0]))
+        self.hsim.get_agent(0).set_state(st, reset_sensors=True, infer_sensor_states=False)
+        obs = self.hsim.get_sensor_observations()
+        return np.ascontiguousarray(obs["rgb"][..., :3]), obs["depth"]
+
     def tick(self, h, payload):
-        rgb = np.frombuffer(payload, np.uint8).reshape(h["h"], h["w"], 3)
+        gt = None
+        if self.hsim is not None:
+            rgb, gt = self.habitat_view(h)
+            h = dict(h, position=[h["position"][0], self.floor_y + float(h["cam_height_m"]), h["position"][2]])
+        else:
+            rgb = np.frombuffer(payload, np.uint8).reshape(h["h"], h["w"], 3)
         pose = {"position": np.asarray(h["position"], float), "forward_xz": list(h["forward_xz"])}
         t0 = time.perf_counter()
         depth = self.est.estimate(rgb)
@@ -89,8 +144,19 @@ class Brain:
                                   "linear": float(lin), "angular": float(ang), "tick_ms": tick_ms,
                                   "depth_ms": depth_ms, "diag": rec, "looks": looks, "depth_small": small,
                                   "walls": jsonable(getattr(nav.map, "walls", []))})
-        return {"linear": float(lin), "angular": float(ang), "tick_ms": tick_ms, "depth_ms": depth_ms,
-                "safety": rec.get("safety_level"), "event": rec.get("event"), "looks": jsonable(looks)}
+        out = {"linear": float(lin), "angular": float(ang), "tick_ms": tick_ms, "depth_ms": depth_ms,
+               "safety": rec.get("safety_level"), "event": rec.get("event"), "looks": jsonable(looks)}
+        if gt is not None:
+            gh, gw = gt.shape
+            out["gt_ahead_m"] = float(np.median(gt[int(.4 * gh):int(.9 * gh), int(.25 * gw):int(.75 * gw)]))
+            self.log["ticks"][-1]["gt_ahead_m"] = out["gt_ahead_m"]
+            if len(self.log["ticks"]) % 2 == 1:  # keep every other head frame (small JPEG) for the video's POV inserts
+                import io
+                from PIL import Image
+                buf = io.BytesIO()
+                Image.fromarray(rgb).save(buf, "JPEG", quality=85)
+                self.log["ticks"][-1]["rgb_jpg"] = buf.getvalue()
+        return out
 
     def end(self, h):
         if self.log_path:

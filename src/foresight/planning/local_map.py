@@ -233,14 +233,21 @@ class Plan:
 
 
 def cost_grid(m: OccupancyMap, pos_xz, robot_radius: float = 0.25, unknown_cost: float = 1.6,
-              obstacle_cost: float = 60.0, clearance_m: float = 0.6, clearance_cost: float = 4.0):
-    """Per-cell traversal cost shared by `plan` and frontier selection; also returns the inflated obstacles."""
+              obstacle_cost: float = 60.0, clearance_m: float = 0.6, clearance_cost: float = 4.0,
+              virtual_cost: float = None):
+    """Per-cell traversal cost shared by `plan` and frontier selection; also returns the inflated obstacles.
+    virtual_cost: cost of the (uninflated) virtual-wall cells themselves, e.g. 1e6 to make a confirmed mirror wall
+    impassable. None (default, every evaluated run): virtual walls cost like any obstacle, so a planner can still
+    prefer crossing a thin wall into depth's phantom free space over a long detour through unknown cells (the G1
+    mirror-trap run in Isaac, 2026-11-20)."""
     occ = m.occupied()
     blocked = binary_dilation(occ, structure=_disk(robot_radius / m.res))
     pr, pc = m.cell(pos_xz)
     blocked[max(pr - 2, 0):pr + 3, max(pc - 2, 0):pc + 3] = False  # never plan from inside the inflation
     near = np.clip(1.0 - distance_transform_edt(~occ) * m.res / clearance_m, 0.0, 1.0)
     cost = np.where(blocked, obstacle_cost, np.where(m.known_free(), 1.0, unknown_cost) + clearance_cost * near)
+    if virtual_cost is not None:
+        cost = np.where(m.virtual, virtual_cost, cost)
     return cost.astype(np.float64), blocked
 
 
@@ -267,14 +274,15 @@ def distances_from(m: OccupancyMap, cost: np.ndarray, pos_xz) -> np.ndarray:
 
 def plan(m: OccupancyMap, pos_xz, goal_xz, robot_radius: float = 0.25, unknown_cost: float = 1.6,
          obstacle_cost: float = 60.0, clearance_m: float = 0.6, clearance_cost: float = 4.0,
-         lookahead_m: float = 0.8, cost: np.ndarray = None) -> Plan:
+         lookahead_m: float = 0.8, cost: np.ndarray = None, virtual_cost: float = None) -> Plan:
     """Mapped obstacles (inflated by the robot radius) are very expensive rather than impassable: a goal
     the map has wrongly boxed in (e.g. by furniture seen *in* a mirror) stays reachable, while any real
     detour is far cheaper than crossing a wall. Cells within `clearance_m` of an obstacle cost up to
     `clearance_cost` extra, so routes run down the middle of doorways and corridors instead of hugging walls.
     cost: a precomputed `cost_grid` for this map and position (it is copied, not modified)."""
     if cost is None:
-        cost, _ = cost_grid(m, pos_xz, robot_radius, unknown_cost, obstacle_cost, clearance_m, clearance_cost)
+        cost, _ = cost_grid(m, pos_xz, robot_radius, unknown_cost, obstacle_cost, clearance_m, clearance_cost,
+                            virtual_cost)
     else:
         cost = cost.copy()
     pr, pc = m.cell(pos_xz)

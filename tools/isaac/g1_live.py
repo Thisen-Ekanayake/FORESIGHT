@@ -35,7 +35,7 @@ parser.add_argument("--assets", default=os.path.join(ROOT, "isaac_assets"), help
 parser.add_argument("--scene", default="office", choices=["office", "hospital", "warehouse", "dtw", "hm3d", "cube", "hm3d_nocoll", "hm3d_nomat", "none"])
 parser.add_argument("--start", nargs=3, type=float, default=[0.0, 0.0, 0.0], metavar=("X", "Y", "YAW_DEG"))
 parser.add_argument("--goal", nargs=2, type=float, default=[4.0, 0.0], metavar=("X", "Y"))
-parser.add_argument("--cond", default="foresight", choices=["map", "foresight"], help="map = depth-only (the ghost)")
+parser.add_argument("--cond", default="foresight", choices=["map", "foresight", "foresight_v1"], help="map = depth-only (the ghost)")
 parser.add_argument("--labels", nargs="*", default=["glass wall", "glass door", "mirror"],
                     help="what FORESIGHT's guard grounds and fills (foresight only)")
 parser.add_argument("--max-sim-s", type=float, default=90.0)
@@ -60,6 +60,9 @@ parser.add_argument("--pt-updates", type=int, default=6, help="app updates per p
 parser.add_argument("--set-mode", default="cfg", choices=["cfg", "ref"],
                     help="cfg: scene via Isaac Lab's scene config; ref: referenced onto the stage after env creation")
 parser.add_argument("--warmup", type=int, default=300, help="render this many frames first (RTX streams big scenes in)")
+parser.add_argument("--perception", default="isaac", choices=["isaac", "habitat"],
+                    help="habitat: no renderer in Isaac (physics only); the brain renders the head camera in Habitat from "
+                         "the same HM3D scan at the robot's pose (leaves the GPU to full-precision Qwen)")
 parser.add_argument("--physics-device", default="cuda:0", help="cpu frees GPU memory for the brain's VLM")
 parser.add_argument("--realtime-render", action="store_true", help="RTX real-time for the head camera (default)")
 args, _ = parser.parse_known_args()
@@ -71,11 +74,14 @@ _kit_args += (" --/rtx/post/histogram/enabled=true" if args.iso <= 0 else f" --/
 if args.pt:  # choose the renderer at launch (setting it after startup hung the app)
     _kit_args += (f" --/rtx/rendermode=PathTracing --/rtx/pathtracing/spp={args.spp}"
                   f" --/rtx/pathtracing/totalSpp={args.spp} --/rtx/pathtracing/optixDenoiser/enabled=true")
-_render_cfg = dict(renderer="PathTracing" if args.pt else "RealTimePathTracing", samples_per_pixel_per_frame=args.spp,
+_render_cfg = dict(renderer="PathTracing" if args.pt else os.environ.get("G1_RT_RENDERER", "RealTimePathTracing"), samples_per_pixel_per_frame=args.spp,
                    denoiser=True, max_bounces=6, max_specular_transmission_bounces=8, sync_loads=True)
-app = AppLauncher(headless=True, enable_cameras=True, kit_args=_kit_args.strip(), rendering_mode=args.rendering_mode,
-                  **_render_cfg,
-                  experience=os.environ.get("G1_EXPERIENCE", "/ml/isaac-sim/apps/isaacsim.exp.base.python.kit")).app
+if args.perception == "habitat":
+    app = AppLauncher(headless=True, enable_cameras=False).app  # Isaac Lab's headless app: physics, no renderer
+else:
+    app = AppLauncher(headless=True, enable_cameras=True, kit_args=_kit_args.strip(), rendering_mode=args.rendering_mode,
+                      **_render_cfg,
+                      experience=os.environ.get("G1_EXPERIENCE", "/ml/isaac-sim/apps/isaacsim.exp.base.python.kit")).app
 
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
@@ -266,8 +272,9 @@ class RepCam:
         return rgb, d
 
 
-head = RepCam("/World/HeadCam", 640, 640, 10.5, depth=True)
-chase = RepCam("/World/ChaseCam", 1920, 1080, 18.0) if args.chase is not None else None
+RENDER = args.perception == "isaac"
+head = RepCam("/World/HeadCam", 640, 640, 10.5, depth=True) if RENDER else None
+chase = RepCam("/World/ChaseCam", 1920, 1080, 18.0) if (args.chase is not None and RENDER) else None
 term = env.command_manager.get_term("base_velocity")
 dt_ctrl = env.step_dt  # 0.02 s
 print(f"G1: {len(robot.joint_names)} joints, control dt {dt_ctrl:.3f} s, scene {args.scene}", flush=True)
@@ -303,6 +310,8 @@ def look():
     pos, yaw, _ = root_pose()
     f = np.array([math.cos(yaw), math.sin(yaw), 0.0])
     cpos = np.array([pos[0], pos[1], args.cam_height]) + f * 0.10
+    if head is None:  # Habitat perception: the brain renders the view
+        return np.zeros((1, 1, 3), np.uint8), None, cpos, yaw
     head.look_at(cpos, cpos + f)
     rgb, depth = head.grab(updates=args.pt_updates if args.pt else 2)
     return rgb, depth, cpos, yaw
@@ -315,14 +324,14 @@ def to_habitat(p):
 _w0 = time.time()
 import omni.usd  # noqa: E402
 _ctx = omni.usd.get_context()
-for k in range(600):  # pump the Kit app until the stage reports everything (payloads, textures) loaded
+for k in range(600 if RENDER else 0):  # pump the Kit app until the stage reports everything (payloads, textures) loaded
     app.update()
     _msg, _done, _total = _ctx.get_stage_loading_status()
     if k % 50 == 0:
         print(f"  loading {k}: {_done}/{_total} {_msg}", flush=True)
     if _total == 0 and k > 30:
         break
-for k in range(args.warmup):  # let RTX load the scene's geometry and materials before any frame is used
+for k in range(args.warmup if RENDER else 0):  # let RTX load the scene's geometry and materials before any frame is used
     app.update()
     if k % 100 == 99:
         _r, _d, _, _ = look()
@@ -360,7 +369,8 @@ start_pos, _, _ = root_pose()
 wire.send(sock, {"type": "reset", "cond": args.cond, "start_xz": [start_pos[0], -start_pos[1]],
                  "goal_xz": [goal[0], -goal[1]], "cam_height_m": args.cam_height, "hazard_labels": args.labels,
                  "max_linear_mps": args.max_linear, "robust_scan": False, "guard": "fill",
-                 "log_path": os.path.join(os.path.abspath(args.out), "brain.pkl")})
+                 "log_path": os.path.join(os.path.abspath(args.out), "brain.pkl"),
+                 **({"habitat_scene": "00808-y9hTuugGdiq", "habitat_floor_y": 0.0614} if not RENDER else {})})
 wire.recv(sock)
 result, contact_t, w0 = "timeout", None, time.time()
 while t_sim[0] < args.max_sim_s:
@@ -377,10 +387,14 @@ while t_sim[0] < args.max_sim_s:
     right = np.array([math.sin(yaw), -math.cos(yaw)])
     bearing = float(math.atan2(to_goal @ right, to_goal @ np.array([math.cos(yaw), math.sin(yaw)])))
     wire.send(sock, {"type": "tick", "t": t_sim[0], "position": to_habitat([pos[0], pos[1], cpos[2]]),
-                     "forward_xz": fwd_h, "bearing": bearing, "h": rgb.shape[0], "w": rgb.shape[1]}, rgb.tobytes())
+                     "forward_xz": fwd_h, "bearing": bearing, "h": rgb.shape[0], "w": rgb.shape[1],
+                     "cam_height_m": args.cam_height}, rgb.tobytes() if RENDER else b"")
     r, _ = wire.recv(sock)
-    h, w = depth.shape
-    gt_ahead = float(np.median(depth[int(.4 * h):int(.9 * h), int(.25 * w):int(.75 * w)]))
+    if depth is not None:
+        h, w = depth.shape
+        gt_ahead = float(np.median(depth[int(.4 * h):int(.9 * h), int(.25 * w):int(.75 * w)]))
+    else:
+        gt_ahead = float(r.get("gt_ahead_m", 99.0))
     log["ticks"].append({"t": round(t_sim[0], 4), "cam_pos": cpos.round(4).tolist(), "yaw": round(yaw, 5),
                          "gt_ahead_m": round(gt_ahead, 3), **{k: r.get(k) for k in ("linear", "angular", "tick_ms",
                                                                                      "safety", "event")}})

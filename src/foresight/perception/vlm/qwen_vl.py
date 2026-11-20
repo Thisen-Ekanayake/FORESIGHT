@@ -73,17 +73,20 @@ class Qwen3VLSceneReasoner:
     """
 
     def __init__(self, model_name: str = DEFAULT_MODEL, device: str | None = None, quant: str | None = None):
-        """quant: None (bf16, every evaluated run) or "8bit" (bitsandbytes LLM.int8, ~2.5 GB instead of ~4.4 GB), for
+        """quant: None (bf16, every evaluated run), "8bit" (bitsandbytes LLM.int8, ~2.5 GB, but 6-15 s per look) or "4bit"
+        (NF4 language model, vision tower kept in bf16), for
         sharing the 8 GB GPU with Isaac Sim in the live G1 runs; also set by FORESIGHT_VLM_QUANT=8bit."""
         import os
         quant = quant or os.environ.get("FORESIGHT_VLM_QUANT") or None
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.processor = AutoProcessor.from_pretrained(model_name)
-        if quant == "8bit":
+        if quant in ("8bit", "4bit"):
             from transformers import BitsAndBytesConfig
+            qc = (BitsAndBytesConfig(load_in_8bit=True) if quant == "8bit" else
+                  BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch.bfloat16,
+                                     llm_int8_skip_modules=["visual", "lm_head"]))
             self.model = Qwen3VLForConditionalGeneration.from_pretrained(
-                model_name, dtype=torch.bfloat16, device_map={"": 0},
-                quantization_config=BitsAndBytesConfig(load_in_8bit=True)).eval()
+                model_name, dtype=torch.bfloat16, device_map={"": 0}, quantization_config=qc).eval()
         else:
             self.model = (
                 Qwen3VLForConditionalGeneration.from_pretrained(
