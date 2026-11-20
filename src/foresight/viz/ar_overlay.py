@@ -203,7 +203,7 @@ class Overlay:
             return
         s = self.ss
         X, Y = xy[0] * s
-        fq = font("text", int(27 * scale * s), "Medium")
+        fq = font("text", int(31 * scale * s), "Medium")
         words, lines, cur = text.split(), [], ""
         for wd in words:
             trial = (cur + " " + wd).strip()
@@ -213,21 +213,23 @@ class Overlay:
                 lines.append(cur)
                 cur = wd
         lines.append(cur)
-        lh = 36 * s * scale
+        lh = 41 * s * scale
         pad = 18 * s * scale
         w = max(self.sd.textlength(l_, font=fq) for l_ in lines) + 2 * pad
         hgt = lh * len(lines) + 2 * pad - 8 * s * scale
         x0, y0 = X - w / 2, Y - 60 * s * scale - hgt
         self.sd.line([(X, Y), (X, y0 + hgt)], fill=HOLO + (int(200 * alpha),), width=int(2 * s * scale))
-        self.sd.rounded_rectangle((x0, y0, x0 + w, y0 + hgt), radius=16 * s * scale, fill=(255, 255, 255, int(28 * alpha)),
-                                  outline=(255, 255, 255, int(120 * alpha)), width=int(1.6 * s * scale))
+        self.sd.rounded_rectangle((x0, y0, x0 + w, y0 + hgt), radius=16 * s * scale, fill=PANEL + (int(205 * alpha),),
+                                  outline=HOLO + (int(170 * alpha),), width=int(1.8 * s * scale))
         for i, l_ in enumerate(lines):
             self.sd.text((x0 + pad, y0 + pad - 4 * s * scale + i * lh), l_, font=fq, fill=INK + (int(255 * alpha),))
 
     # -------------------------------------------------------------- compose
     def compose(self, frame: Image.Image, corner: Optional[str] = "SIMULATED IN NVIDIA ISAAC SIM") -> Image.Image:
         base = frame.convert("RGBA").resize((self.cam.w, self.cam.h)) if frame.size != (self.cam.w, self.cam.h) else frame.convert("RGBA")
-        glow = self.glow.filter(ImageFilter.GaussianBlur(10 * self.ss)).resize((self.cam.w, self.cam.h), Image.LANCZOS)
+        q = 4 * self.ss  # blur the glow at quarter resolution: the same soft halo for ~1/50 of the cost
+        glow = (self.glow.resize((self.W // q, self.H // q), Image.BILINEAR).filter(ImageFilter.GaussianBlur(10 * self.ss / q))
+                .resize((self.cam.w, self.cam.h), Image.BILINEAR))
         sharp = self.sharp.resize((self.cam.w, self.cam.h), Image.LANCZOS)
         # additive-ish glow: screen blend of the glow layer
         g = np.asarray(glow, np.float32) / 255.0

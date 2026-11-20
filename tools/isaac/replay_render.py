@@ -44,6 +44,7 @@ app = AppLauncher(headless=True, enable_cameras=True, kit_args=_kit, renderer="P
                   max_specular_transmission_bounces=8, sync_loads=True,
                   experience="/ml/isaac-sim/apps/isaacsim.exp.base.python.kit").app
 
+import carb  # noqa: E402
 import numpy as np  # noqa: E402
 import omni.replicator.core as rep  # noqa: E402
 import omni.timeline  # noqa: E402
@@ -233,6 +234,21 @@ for shot in shots:
         elif c["mode"] == "follow":
             eye = body - f * c.get("back", 2.2) + rgt * c.get("side", 0.6) + np.array([0, 0, c.get("height", 0.55)])
             tgt = body + f * c.get("ahead", 1.0) + np.array([0, 0, -0.15])
+            # keep the camera out of walls: raycast from just outside the robot toward the desired eye position and
+            # pull in to 85% of the free distance (the scan's colliders)
+            try:
+                from omni.physx import get_physx_scene_query_interface
+                v = eye - body
+                dist = float(np.linalg.norm(v))
+                dirv = v / max(dist, 1e-6)
+                o = body + dirv * 0.45
+                hit = get_physx_scene_query_interface().raycast_closest(carb.Float3(*o.tolist()),
+                                                                        carb.Float3(*dirv.tolist()), dist)
+                if hit["hit"]:
+                    eye = o + dirv * max(0.25, 0.85 * hit["distance"])
+            except Exception as e:  # noqa: BLE001
+                if k == 0:
+                    print("raycast unavailable, plain follow camera:", e, flush=True)
         elif c["mode"] == "pov":  # the robot's own head camera: level, 1.22 m, 0.1 m ahead of the base
             eye = np.array([rp_[0], rp_[1], 1.22]) + f * 0.10
             tgt = eye + f

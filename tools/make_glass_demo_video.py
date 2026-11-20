@@ -14,6 +14,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from PIL import Image  # noqa: E402
+
 from foresight.viz.glass_demo_video import FPS, Film, mix_music  # noqa: E402
 from foresight.viz.mirror_trap_video import Voice  # noqa: E402
 from foresight.viz.showcase_video import Writer  # noqa: E402
@@ -35,11 +37,28 @@ LINES = {
 }
 
 
+_W = {}
+
+
+def _init(rate, music_title):
+    _W["film"] = Film(ROOT, rate=rate, music_title=music_title)
+
+
+def _frame(job):
+    """One composed frame (worker process): segment `name` of n frames, frame k -> raw RGB bytes."""
+    import foresight.viz.glass_demo_video as G
+    name, n, k = job
+    G.PREVIEW["k"] = k
+    gen = getattr(_W["film"], "seg_" + name)
+    return next(gen(n, [])).convert("RGB").tobytes()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="results/isaac/foresight_through_the_glass.mp4")
     ap.add_argument("--preview", type=float, default=None)
     ap.add_argument("--rate", type=float, default=0.8)
+    ap.add_argument("--workers", type=int, default=10)
     ap.add_argument("--music", default="data/raw/music/Lightless Dawn.mp3")
     ap.add_argument("--tts-python", default="/ml/HelaBERT_Analysis/.venv/bin/python")
     ap.add_argument("--kokoro-home", default="/ml/Models/kokoro/hf")
@@ -73,26 +92,30 @@ def main():
         t0 = 0.0
         for name, gen, sec, cues in segs:
             if a.preview < t0 + sec:
+                import foresight.viz.glass_demo_video as G
                 n = int(round(sec * FPS))
-                k = int((a.preview - t0) * FPS)
-                for i, im in enumerate(gen(n, cues)):
-                    if i == k:
-                        p = out.with_name(f"preview_{a.preview:06.1f}.jpg")
-                        im.convert("RGB").save(p, quality=92)
-                        print("preview", name, "->", p)
-                        return
+                G.PREVIEW["k"] = int((a.preview - t0) * FPS)
+                for im in gen(n, cues):
+                    p = out.with_name(f"preview_{a.preview:06.1f}.jpg")
+                    im.convert("RGB").save(p, quality=92)
+                    print("preview", name, "->", p)
+                    return
             t0 += sec
         return
     silent = out.with_name(out.stem + ".silent.mp4")
     w = Writer(silent, fade=10)
     spans = []
-    for name, gen, sec, cues in segs:
-        n = int(round(sec * FPS))
-        t0 = w.n / FPS
-        for line, st in cues:
-            vo.cues.append((t0 + st, line))
-            spans.append((t0 + st, t0 + st + dur[line]))
-        w.segment(gen(n, cues), n)
+    import multiprocessing as mp
+    with mp.get_context("fork").Pool(a.workers, initializer=_init, initargs=(a.rate, Path(a.music).stem)) as pool:
+        for name, gen, sec, cues in segs:
+            n = int(round(sec * FPS))
+            t0 = w.n / FPS
+            for line, st in cues:
+                vo.cues.append((t0 + st, line))
+                spans.append((t0 + st, t0 + st + dur[line]))
+            frames = (Image.frombytes("RGB", (1920, 1920), b) for b in
+                      pool.imap(_frame, [(name, n, k) for k in range(n)], chunksize=4))
+            w.segment(frames, n)
         print(f"  {name}: {n / FPS:.1f} s (total {w.n / FPS:.1f} s)", flush=True)
     w.close()
     total = w.n / FPS

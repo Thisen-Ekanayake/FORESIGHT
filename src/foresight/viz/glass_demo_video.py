@@ -108,14 +108,25 @@ def full(img):
     return out
 
 
+_VIG = {}
+
+
 def vignette(img, strength=0.55):
-    """Darken the edges a little (cinematic) and lift the top band where the corner brand sits."""
-    w = Image.new("L", (S // 8, S // 8), 0)
-    d = ImageDraw.Draw(w)
-    d.ellipse((-S // 32, -S // 32, S // 8 + S // 32, S // 8 + S // 32), fill=255)
-    w = w.filter(ImageFilter.GaussianBlur(S // 60)).resize((S, S), Image.BILINEAR)
-    dark = Image.new("RGB", (S, S), (0, 0, 0))
-    return Image.composite(img, Image.blend(img, dark, strength), w)
+    """Darken the edges a little (cinematic)."""
+    if "m" not in _VIG:
+        w = Image.new("L", (S // 8, S // 8), 0)
+        ImageDraw.Draw(w).ellipse((-S // 32, -S // 32, S // 8 + S // 32, S // 8 + S // 32), fill=255)
+        _VIG["m"] = w.filter(ImageFilter.GaussianBlur(S // 60)).resize((S, S), Image.BILINEAR)
+        _VIG["k"] = Image.new("RGB", (S, S), (0, 0, 0))
+    return Image.composite(img, Image.blend(img, _VIG["k"], strength), _VIG["m"])
+
+
+PREVIEW = {"k": None}
+
+
+def ks(n):
+    """Frame indices of a segment: all, or just the previewed one."""
+    return [PREVIEW["k"]] if PREVIEW["k"] is not None and PREVIEW["k"] < n else ([] if PREVIEW["k"] is not None else range(n))
 
 
 def brand(img, alpha=1.0):
@@ -146,9 +157,13 @@ class Film:
     def __init__(self, root: Path, rate: float = 0.8, music_title: str = ""):
         self.root, self.rate, self.music_title = root, rate, music_title
         fr = root / "results/isaac/film"
-        self.sh = {n: Shot(fr / g / n) for g, names in (("home", ("h_duel", "h_check", "h_exit", "h_pov_ghost")),
-                                                          ("office", ("o_orbit", "o_walk", "o_pov")))
-                   for n in names if (fr / g / n / "frames.json").exists()}
+        self.sh = {}
+        for g, names in (("home", ("h_duel", "h_check", "h_exit", "h_pov_ghost")), ("office", ("o_orbit", "o_walk", "o_pov"))):
+            for n in names:
+                for cand in (fr / g / n, fr / g / f"{n}_v1"):  # a re-shoot in progress falls back to its first version
+                    if (cand / "frames.json").exists():
+                        self.sh[n] = Shot(cand)
+                        break
         live = root / "results/isaac/live"
         self.m_hero = Motion(live / "home_v1b/motion.json")
         self.m_ghost = Motion(live / "home_map_hab/motion.json")
@@ -163,7 +178,7 @@ class Film:
     def seg_open(self, n, cues):
         sh = self.sh["o_pov"]
         v = self.office_vlm
-        for k in range(n):
+        for k in ks(n):
             tv = k / FPS * self.rate
             img = full(vignette(sh.image(tv * 0.9)))
             ov = Overlay(sh.camera(tv * 0.9))
@@ -176,7 +191,7 @@ class Film:
 
     def seg_office(self, n, cues):
         a_len = self.sh["o_orbit"].length
-        for k in range(n):
+        for k in ks(n):
             tv = k / FPS * self.rate
             if tv < a_len:
                 sh, ts = self.sh["o_orbit"], tv
@@ -204,24 +219,27 @@ class Film:
 
     def seg_pov(self, n, cues):
         sh = self.sh["h_pov_ghost"]
-        for k in range(n):
+        for k in ks(n):
             tv = k / FPS * self.rate
             img = full(vignette(sh.image(tv)))
             ov = Overlay(sh.camera(tv))
             t = sh.sim_t(tv)
             b = self.b_ghost.at(t)
             da, gt = b["diag"].get("depth_ahead_m"), b.get("gt_ahead_m")
-            p = self.m_ghost.at(t)
-            if da is not None and gt is not None and tv > 0.8:
-                ov.label([MIRROR_X, p[1] + 0.35, 1.45], "MIRROR", f"{gt:.1f} m", sub=f"depth from pixels reads {da:.1f} m",
-                         tone="warn", alpha=ease((tv - 0.8) / 0.6), lead_px=90, rise_px=60)
+            rx, ry, yaw = sh.frame(tv)["robot"]
+            cx, cy = rx + 0.1 * math.cos(yaw), ry + 0.1 * math.sin(yaw)
+            facing = math.cos(yaw) > 0.6 and cx < MIRROR_X - 0.15
+            if da is not None and gt is not None and tv > 0.8 and facing:
+                ay = cy + math.tan(yaw) * (MIRROR_X - cx)  # where the line of sight meets the mirror
+                ov.label([MIRROR_X, ay - 0.15, 1.0], "MIRROR", f"{gt:.1f} m", sub=f"depth from pixels reads {da:.1f} m",
+                         tone="warn", side="left", alpha=ease((tv - 0.8) / 0.6), lead_px=110, rise_px=180)
             im = ov.compose(img).convert("RGBA")
             im = brand(im)
             yield chip(im, "REAL HOME · 3D-SCANNED", ease(tv / 0.8))
 
     def seg_duel(self, n, cues):
         sh = self.sh["h_duel"]
-        for k in range(n):
+        for k in ks(n):
             tv = k / FPS * self.rate
             img = full(vignette(sh.image(tv)))
             ov = Overlay(sh.camera(tv))
@@ -229,10 +247,8 @@ class Film:
             t, tg = sh.sim_t(tv), f["t_ghost"] + (sh.sim_t(tv) - f["t"])
             g = self.m_ghost.at(tg)
             h = self.m_hero.at(t)
-            ov.label([g[0], g[1], 1.4], "DEPTH ONLY", None, tone="info", side="right", alpha=ease((tv - 0.5) / 0.6),
-                     lead_px=70, rise_px=60)
-            ov.label([h[0], h[1], 1.4], "FORESIGHT", None, tone="good", side="left", alpha=ease((tv - 1.5) / 0.6),
-                     lead_px=70, rise_px=40)
+            ov.label([g[0], g[1], 1.15], "DEPTH ONLY", None, sub="same start, same goal", tone="info", side="right",
+                     alpha=ease((tv - 0.5) / 0.6), lead_px=70, rise_px=60)
             if tg >= self.crash_t:
                 ov.label([MIRROR_X, g[1], 1.0], "COLLISION", f"{self.crash_t:.1f} s", tone="warn",
                          alpha=ease((tg - self.crash_t) / 0.3), lead_px=80, rise_px=90)
@@ -248,7 +264,7 @@ class Film:
             i = s.lower().find("appears to be")
             quote = ("…" + s[i:].split(";")[0].split("—")[0].rstrip(", .") + "…") if i >= 0 else s[:110] + "…"
         confirm_t = next((t for t, e in self.b_hero.events() if e == "confirmed"), None)
-        for k in range(n):
+        for k in ks(n):
             tv = k / FPS * self.rate
             img = full(vignette(sh.image(tv)))
             ov = Overlay(sh.camera(tv))
@@ -257,17 +273,19 @@ class Film:
             for (a, b) in self.b_hero.walls_isaac(t):
                 ov.route([[a[0], a[1], 0.03], [b[0], b[1], 0.03]], tone="warn", width=9, alpha=0.95, fade_tail=False)
             if quote:
-                ov.thought([h[0], h[1], 1.45], quote, alpha=ease((tv - 0.6) / 0.6) * (1 - ease((tv - 7.5) / 0.6)),
-                           max_w_px=560)
-            if confirm_t is not None and t >= confirm_t - 25:
-                ov.label([MIRROR_X, -0.3, 1.5], "MIRROR", "walled off", tone="warn", alpha=ease((tv - 5.0) / 0.6),
-                         lead_px=80, rise_px=60)
+                ov.thought([h[0], h[1], 1.4], quote, alpha=ease((tv - 0.6) / 0.6) * (1 - ease((tv - 9.0) / 0.6)),
+                           max_w_px=600)
+            walls = self.b_hero.walls_isaac(t)
+            if confirm_t is not None and t >= confirm_t and walls:
+                (a, b) = walls[0]
+                ov.label([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, 0.05], "MIRROR AHEAD", "walled off", tone="warn",
+                         alpha=ease((t - confirm_t) / 1.5), lead_px=90, rise_px=110)
             yield brand(ov.compose(img).convert("RGBA"))
 
     def seg_exit(self, n, cues):
         sh = self.sh["h_exit"]
         goal = np.array([2.4, -1.1])
-        for k in range(n):
+        for k in ks(n):
             tv = k / FPS * self.rate
             img = full(vignette(sh.image(tv)))
             ov = Overlay(sh.camera(tv))
@@ -286,7 +304,7 @@ class Film:
         credits = ["NVIDIA Isaac Sim · Isaac Lab · Unitree G1 walking policy", "HM3D (Ramakrishnan et al. 2021)",
                    "Depth Anything V2 · Qwen3-VL · Laya", "Voice: Kokoro-82M",
                    f"Music: “{self.music_title}” by Kevin MacLeod (incompetech.com), CC BY 4.0"]
-        for k in range(n):
+        for k in ks(n):
             tv = k / FPS
             im = Image.new("RGBA", (S, S), BG + (255,))
             a = ease(tv / 0.8)
