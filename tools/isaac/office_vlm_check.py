@@ -17,7 +17,7 @@ d = ROOT / "results/isaac/film/office/o_pov"
 frames = sorted(d.glob("[0-9]*.jpg"))
 vlm = Qwen3VLSceneReasoner()
 res = []
-for f in frames[:: max(1, len(frames) // 8)]:
+for f in frames[:: max(1, len(frames) // 4)][:4]:
     img = np.asarray(Image.open(f).convert("RGB").resize((640, 640)))
     p = float(vlm.option_probs(img, PRESENT_PROMPT.format(name="glass wall"), ["yes", "no"])[0])
     res.append({"frame": f.name, "p_glass": round(p, 3), "boxes": vlm.locate(img, "glass wall")})

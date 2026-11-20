@@ -182,7 +182,7 @@ class Film:
             tv = k / FPS * self.rate
             img = full(vignette(sh.image(tv * 0.9)))
             ov = Overlay(sh.camera(tv * 0.9))
-            a = ease((tv - 1.4) / 0.6)
+            a = ease((tv - 0.3) / 0.4)  # the robot faces the glass for its first ~1.5 s, then its look-around turns away
             if v:
                 ov.label([-11.0, 40.3, 1.45], "GLASS", f"{v['p_glass']:.2f}", sub="the vision model, from this frame",
                          tone="warn", alpha=a, lead_px=90, rise_px=60)
@@ -201,7 +201,7 @@ class Film:
             ov = Overlay(sh.camera(ts))
             t = sh.sim_t(ts)
             p = self.m_office.at(t)
-            if sh is self.sh["o_walk"]:
+            if sh is self.sh.get("o_walk"):
                 ov.route(self.m_office.path(t + 0.3, min(t + 9.0, 54.0)), tone="info", width=7, alpha=0.9,
                          pulse=(tv * 0.35) % 1.0)
                 ov.ring([-8.0, 32.5, 0.02], 0.4, "good", alpha=ease((ts - 1.0) / 0.8), t=tv)
