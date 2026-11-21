@@ -45,8 +45,14 @@ parser.add_argument("--after-contact-s", type=float, default=2.0, help="keep sim
 parser.add_argument("--cam-height", type=float, default=1.22, help="head camera height over the floor, m")
 parser.add_argument("--max-linear", type=float, default=0.45)
 parser.add_argument("--out", required=True)
+parser.add_argument("--policy", default="flat", choices=["flat", "rough"],
+                    help="NVIDIA pretrained G1 policy: flat (default) or rough (height-scan obs; run on a plane here)")
 parser.add_argument("--probe", nargs="*", type=float, default=None, metavar="V W SECONDS",
                     help="no brain: walk v m/s, w rad/s for SECONDS (default 0.5 0.0 6) and save stills")
+parser.add_argument("--profile", default=None,
+                    help="no brain: JSON list of [seconds, v, w] segments (a file or an inline string), walked in order")
+parser.add_argument("--cmd-tau", type=float, default=0.0,
+                    help="first-order smoothing of the (v, w) command before the policy, seconds (0 = off)")
 parser.add_argument("--port", type=int, default=47011)
 parser.add_argument("--chase", nargs=6, type=float, default=None, metavar=("EX", "EY", "EZ", "TX", "TY", "TZ"),
                     help="probe: also render a 1920x1080 still from this eye toward this target (world coords)")
@@ -107,8 +113,9 @@ SCENES = {  # usd, (x, y, z) offset applied to the scene
     "hm3d_nocoll": (os.path.join(ROOT, "results/isaac/00808_nocoll.usd"), (0, 0, 0)),
     "hm3d_nomat": (os.path.join(ROOT, "results/isaac/00808_nomat.usd"), (0, 0, 0)),
 }
-TASK = "Isaac-Velocity-Flat-G1-Play-v0"
-CKPT = f"{A}/Isaac/IsaacLab/PretrainedCheckpoints/rsl_rl/Isaac-Velocity-Flat-G1-v0/checkpoint.pt"
+_PN = args.policy.capitalize()
+TASK = f"Isaac-Velocity-{_PN}-G1-Play-v0"
+CKPT = f"{A}/Isaac/IsaacLab/PretrainedCheckpoints/rsl_rl/Isaac-Velocity-{_PN}-G1-v0/checkpoint.pt"
 os.makedirs(args.out, exist_ok=True)
 
 
@@ -120,6 +127,11 @@ def yaw_quat_xyzw(yaw):
 cfg = parse_env_cfg(TASK, device=args.physics_device, num_envs=1)
 cfg.scene.num_envs = 1
 cfg.scene.env_spacing = 0.0
+if args.policy == "rough":  # the rough policy on flat ground: plane terrain (its height scan then reads a flat floor)
+    cfg.scene.terrain.terrain_type = "plane"
+    cfg.scene.terrain.terrain_generator = None
+    if getattr(cfg.curriculum, "terrain_levels", None) is not None:
+        cfg.curriculum.terrain_levels = None
 cfg.scene.robot.spawn.usd_path = f"{A}/Isaac/IsaacLab/Robots/Unitree/G1/g1.usd"
 x0, y0, yaw0 = args.start[0], args.start[1], math.radians(args.start[2])
 cfg.scene.robot.init_state.pos = (x0, y0, 0.74)
@@ -201,11 +213,14 @@ if args.scene != "none" and os.environ.get("G1_HIDE_GROUND", "1") == "1":  # hid
     for p in stage.Traverse():
         if str(p.GetPath()).startswith("/World/ground") and p.IsA(UsdGeom.Gprim):
             UsdGeom.Imageable(p).MakeInvisible()
-# NVIDIA's pretrained actor (rsl_rl 5 format): MLP 123 -> 256 -> 128 -> 128 -> 37, ELU, no observation
-# normalization; deterministic action = the MLP's mean.
+# NVIDIA's pretrained actor (rsl_rl 5 format): ELU MLP (flat 123 -> 256 -> 128 -> 128 -> 37; rough 310 -> 512 -> 256 ->
+# 128 -> 37), no observation normalization; deterministic action = the MLP's mean. Layer sizes come from the checkpoint.
 _sd = torch.load(CKPT, map_location=args.physics_device, weights_only=False)["actor_state_dict"]
-policy = torch.nn.Sequential(torch.nn.Linear(123, 256), torch.nn.ELU(), torch.nn.Linear(256, 128), torch.nn.ELU(),
-                             torch.nn.Linear(128, 128), torch.nn.ELU(), torch.nn.Linear(128, 37)).to(args.physics_device).eval()
+_W = [_sd[f"mlp.{i}.weight"] for i in (0, 2, 4, 6)]
+_layers = []
+for _i, _w in enumerate(_W):
+    _layers += [torch.nn.Linear(_w.shape[1], _w.shape[0])] + ([torch.nn.ELU()] if _i < 3 else [])
+policy = torch.nn.Sequential(*_layers).to(args.physics_device).eval()
 policy.load_state_dict({k[len("mlp."):]: v for k, v in _sd.items() if k.startswith("mlp.")})
 
 
@@ -291,7 +306,15 @@ log = {"args": vars(args), "joint_names": list(robot.joint_names), "dt": dt_ctrl
 t_sim = [0.0]
 
 
+_cmd = [0.0, 0.0]
+
+
 def control_step(v, w, obs):
+    if args.cmd_tau > 0:  # optional low-pass on the command (actuator-level; the brain's decision is unchanged)
+        a = min(1.0, dt_ctrl / args.cmd_tau)
+        _cmd[0] += a * (v - _cmd[0])
+        _cmd[1] += a * (w - _cmd[1])
+        v, w = _cmd
     term.vel_command_b[:, 0] = v
     term.vel_command_b[:, 1] = 0.0
     term.vel_command_b[:, 2] = w
@@ -301,7 +324,8 @@ def control_step(v, w, obs):
     t_sim[0] += dt_ctrl
     pos, yaw, q = root_pose()
     log["steps"].append({"t": round(t_sim[0], 4), "pos": pos.round(5).tolist(), "quat_xyzw": q.round(6).tolist(),
-                         "joints": robot.data.joint_pos.torch[0].cpu().numpy().round(5).tolist(), "cmd": [v, w]})
+                         "joints": robot.data.joint_pos.torch[0].cpu().numpy().round(5).tolist(),
+                         "cmd": [round(float(v), 4), round(float(w), 4)]})
     return obs
 
 
@@ -339,6 +363,20 @@ for k in range(args.warmup if RENDER else 0):  # let RTX load the scene's geomet
 obs = venv.get_observations()
 for _ in range(50):  # settle: stand for 1 s
     obs = control_step(0.0, 0.0, obs)
+
+if args.profile is not None:  # scripted command profile, no brain: walking-quality tests and clean demo walks
+    segs = json.load(open(args.profile)) if os.path.exists(args.profile) else json.loads(args.profile)
+    log["profile"] = segs
+    for secs, v, w in segs:
+        for _ in range(int(round(secs / dt_ctrl))):
+            obs = control_step(v, w, obs)
+    pos, yaw, _ = root_pose()
+    log["result"] = f"profile done at {t_sim[0]:.1f} s"
+    print(f"profile done: {t_sim[0]:.1f} s, z {pos[2]:.2f} m, at {pos.round(2)} yaw {math.degrees(yaw):.1f}", flush=True)
+    json.dump(log, open(os.path.join(args.out, "motion.json"), "w"))
+    env.close()
+    app.close()
+    sys.exit(0)
 
 if args.probe is not None:
     v, w, secs = (list(args.probe) + [0.5, 0.0, 6.0][len(args.probe):])[:3]

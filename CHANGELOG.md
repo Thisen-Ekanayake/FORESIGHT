@@ -3,6 +3,44 @@
 Notable changes to FORESIGHT, newest first. Day-by-day working notes live in `logs/` (untracked);
 milestone status in `PROGRESS.md`.
 
+## [Unreleased] — G1 walking-quality fixes for Isaac renders (2026-11-20)
+
+### Added
+- NVIDIA GEAR-SONIC for the G1 (motion-tracking whole-body controller + kinematic walking planner; NVIDIA Open Model
+  License, `/ml/Models/gear_sonic`): `tools/isaac/sonic.py` (Python/onnxruntime port of the C++ reference deploy)
+  and `tools/isaac/g1_sonic.py` (SONIC's G1 in Isaac Lab, scripted mode/speed/heading profile → motion.json).
+  Natural gait: ~0.5–0.7 m/s at ~1–1.3 steps/s with 45–60 cm steps (the Isaac Lab pretrained policies take ~5–6
+  steps/s with 6–15 cm steps at any speed). `replay_render.py --robot sonic` renders it on Isaac Sim's G1
+  (29 DoF + Dex3), joints matched by name. `g1_live.py --policy rough` for the other Isaac Lab checkpoint.
+- `tools/isaac/g1_live.py --profile '[[s, v, w], ...]'`: scripted command profile, no brain (gait tests, clean demo
+  walks). `--cmd-tau S`: optional first-order smoothing of the (v, w) command before the walking policy (off by
+  default, so no recorded or evaluated run changes).
+- `tools/isaac/replay_render.py`: `rig` camera mode (offset in the robot's frame); per-shot `rtx` renderer settings,
+  `updates` and `preroll`; `--iso N` fixes exposure at launch (histogram off, film ISO N). Turning the histogram off
+  at runtime through carb settings does not stick (exposure still stepped 218 → 193 → 134 within one shot).
+- `replay_render.py --deterministic` (on by default): synchronous geometry streaming and no path-tracing / ray-tracing
+  caches or spatial light cache (NVIDIA's synthetic-data settings). Without it the first 35–130 frames after each
+  launch came out 2–2.5× too bright with a random whole-room colour cast (yellow, blue, pink, green), then snapped
+  to the right look; no renderer setting changed at the snap. `--tex-streaming 0` and `--debug-settings` (per-frame
+  /rtx settings diff) added while diagnosing.
+- `tools/isaac/deflicker.py`: temporal deflicker for rendered frame sequences. Each frame's per-channel tone curve is
+  matched to a running median of its neighbours', which removes the path tracer's occasional 1–10-frame whole-frame
+  flashes (+25 to +40 luma, lifted blacks) and keeps slow, real lighting changes.
+
+### Changed
+- `replay_render.py`: poses are interpolated between the 20 ms control steps (lerp + slerp) instead of snapping to
+  the nearest step; cameras track the root path smoothed over ±0.6 s (`"raw": true` keeps the old behaviour).
+
+### Found (why the "Through the Glass" G1 looked shaky)
+- Not the policy or the scan floor: steady walking/turning commands give ~1.1° body roll on flat ground and on the
+  00808 floor alike. The live run's commands did it: turn command flipping ±0.7 rad/s (48 sign flips), ~6 changes/s,
+  30% of the time turning in place (body roll up to ±7°).
+- Replay: shots at 1.6–3× speed rendered at 15 fps (4–6 frames per step) and nearest-step poses.
+- Path-traced frame flicker at 24 spp with auto exposure (orbit shot: whole-frame tint changes every frame).
+  64 spp + fixed exposure removes it at the same cost (~8.3 s/frame at 1440²). Even with exposure fixed at launch
+  (ISO 14), the first 35–130 frames after launch were wrong (renderer caches, fixed by `--deterministic`); a few
+  later frames flashed, which `deflicker.py` removes. Real cost is ~23 s/frame at 1440² (8.3 s was for stills).
+
 ## [Unreleased] — The Mirror Test: Isaac Sim humanoid demo (2026-11-19)
 
 ### Added

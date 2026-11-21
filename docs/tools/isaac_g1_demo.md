@@ -57,3 +57,24 @@ guard (crash 28.8 s); FORESIGHT v1 with default wall cost (crash 74.6 s, see bel
   material on the robot root, stronger than descendants, and sets gravity to 0 in the config).
 - PhysX's default GPU buffers (sized for thousands of training robots, ~2.5 GB) are shrunk for one robot.
 - Office lighting: its ceiling lights don't light the glass rooms; extra rect lights are added over the shooting area.
+
+## Natural walking with NVIDIA GEAR-SONIC (2026-11-21)
+
+The pretrained Isaac Lab G1 policy takes fast, short steps (~5 steps/s, ~9 cm), so walking shots now use NVIDIA's
+GEAR-SONIC (weights in `/ml/Models/gear_sonic`, NVIDIA Open Model License; code in `/ml/GR00T-WholeBodyControl`,
+Apache-2.0). Credit NVIDIA GEAR-SONIC in any video that uses it.
+
+- `tools/isaac/sonic.py`: a Python port of the deployed planner + v1.1 encoder/decoder tracking loop (onnxruntime-gpu).
+- `tools/isaac/g1_sonic.py`: pass 1. Runs SONIC's own G1 at 200 Hz physics and 50 Hz control, follows a scripted
+  mode/speed/heading profile and writes `motion.json`.
+- `tools/isaac/replay_render.py --robot sonic`: pass 2. Renders Isaac Sim's textured G1, with joints matched by name.
+- Gait (office walk, slow_walk 0.4 m/s): ~0.5 m/s, ~1–1.3 steps/s, 45–60 cm steps, roll sd ~2°.
+- The path tracer renders flicker-free by default (`--deterministic`: caches off, synchronous geometry loading).
+  `tools/isaac/deflicker.py` is only for older renders.
+
+```
+tools/isaac/isaaclab_run.sh tools/isaac/g1_sonic.py --scene office --out results/isaac/sonic/office_walk \
+    --start -13.17 39.2 -44.3 --profile '[[1.5,"idle",-1,-44.3],[3,"slow_walk",0.4,-44.3],[3,"slow_walk",0.4,-44.3,-100],[3.5,"slow_walk",0.4,-100],[3,"idle",-1,-100]]'
+tools/isaac/isaaclab_run.sh tools/isaac/replay_render.py --scene office --robot sonic \
+    --shots results/isaac/sonic/walk10_shot.json --out results/isaac/sonic/render --fps 30 --spp 64 --iso 14
+```

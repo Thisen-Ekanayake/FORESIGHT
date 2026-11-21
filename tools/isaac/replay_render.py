@@ -9,7 +9,9 @@ Two robots can share a shot: env_0 = "hero", env_1 = "ghost" (drawn translucent,
 shots.json: [{"name": "s1", "hero": "results/.../motion.json", "ghost": null, "t0": 0, "t1": 20, "speed": 2.0,
              "cam": {"mode": "fixed", "eye": [x, y, z], "target": [x, y, z], "track": 0.5, "focal": 18}}, ...]
 cam modes: fixed (eye; target blended toward the robot by `track`), follow (behind the robot: back, side, height,
-smoothing), orbit (center, radius, height, deg0, deg1).
+smoothing), rig (offset [fwd, left, up] in the robot's frame, looking at the body), orbit (center, radius, height,
+deg0, deg1). Cameras track the robot's path smoothed over +-0.6 s ("raw": true for the unsmoothed root pose);
+the robot itself is posed exactly as recorded, interpolated between control steps.
 Per shot: <out>/<name>/NNNNN.jpg and frames.json (sim time, camera eye/target/focal, robot poses) for the overlays.
 """
 import argparse
@@ -25,6 +27,9 @@ sys.path.insert(0, HERE)
 ap = argparse.ArgumentParser()
 ap.add_argument("--assets", default=os.path.join(ROOT, "isaac_assets"))
 ap.add_argument("--scene", required=True, choices=["office", "hm3d", "warehouse", "hospital", "dtw"])
+ap.add_argument("--robot", default="g1", choices=["g1", "sonic"],
+                help="g1 = Isaac Lab's G1 (37 joints, Isaac Lab policy runs); sonic = Isaac Sim's G1 29-DoF + Dex3 hands "
+                     "(the robot of tools/isaac/g1_sonic.py runs; joints matched by name, hand joints at 0)")
 ap.add_argument("--shots", required=True)
 ap.add_argument("--only", nargs="*", default=None, help="render only these shot names")
 ap.add_argument("--out", required=True)
@@ -33,12 +38,27 @@ ap.add_argument("--fps", type=float, default=15.0, help="rendered frames per vid
 ap.add_argument("--spp", type=int, default=24)
 ap.add_argument("--updates", type=int, default=2, help="app updates per frame")
 ap.add_argument("--still", action="store_true", help="render only each shot's first frame")
+ap.add_argument("--iso", type=float, default=0.0,
+                help="fixed exposure (film ISO), set at launch; 0 = auto exposure (histogram). Auto exposure drifts and "
+                     "steps between frames and between runs, and turning it off at runtime does not stick")
+ap.add_argument("--tex-streaming", type=int, default=1, help="0 = load every texture fully at launch (no streaming)")
+ap.add_argument("--deterministic", type=int, default=1,
+                help="1 = synchronous geometry streaming and no path-tracing/light caches (the synthetic-data settings). "
+                     "Without it the first 35-130 frames after launch come out washed out with a random colour cast")
+ap.add_argument("--debug-settings", action="store_true", help="print /rtx settings that change between frames, and frame luma")
 args, _ = ap.parse_known_args()
 
 from isaaclab.app import AppLauncher  # noqa: E402
 
 _kit = (f"--/rtx/rendermode=PathTracing --/rtx/pathtracing/spp={args.spp} --/rtx/pathtracing/totalSpp={args.spp}"
-        " --/rtx/pathtracing/optixDenoiser/enabled=true --/rtx/post/histogram/enabled=true")
+        " --/rtx/pathtracing/optixDenoiser/enabled=true"
+        + (f" --/rtx/post/histogram/enabled=false --/rtx/post/tonemap/filmIso={args.iso}" if args.iso > 0
+           else " --/rtx/post/histogram/enabled=true")
+        + (" --/rtx-transient/hydra/geometrystreaming/syncLoad=true --/rtx/pathtracing/cached/enabled=false"
+           " --/rtx/pathtracing/lightcache/cached/enabled=false --/rtx/pathtracing/lightcache/spatialCache/enabled=false"
+           " --/rtx/raytracing/cached/enabled=false --/rtx/raytracing/lightcache/spatialCache/enabled=false"
+           if args.deterministic else "")
+        + ("" if args.tex_streaming else " --/rtx-transient/resourcemanager/enableTextureStreaming=false"))
 app = AppLauncher(headless=True, enable_cameras=True, kit_args=_kit, renderer="PathTracing",
                   samples_per_pixel_per_frame=args.spp, denoiser=True, max_bounces=6,
                   max_specular_transmission_bounces=8, sync_loads=True,
@@ -74,6 +94,17 @@ cfg = parse_env_cfg("Isaac-Velocity-Flat-G1-Play-v0", device="cuda:0", num_envs=
 cfg.scene.num_envs = 2 if need_ghost else 1
 cfg.scene.env_spacing = 0.0
 cfg.scene.robot.spawn.usd_path = f"{A}/Isaac/IsaacLab/Robots/Unitree/G1/g1.usd"
+if args.robot == "sonic":  # posed only (gravity off), so one stiff implicit actuator for every joint is enough
+    from isaaclab.actuators import ImplicitActuatorCfg
+    cfg.scene.robot.spawn.usd_path = f"{A}/Isaac/Robots/Unitree/G1/g1.usd"
+    cfg.scene.robot.actuators = {"all": ImplicitActuatorCfg(joint_names_expr=[".*"], stiffness=200.0, damping=10.0)}
+    cfg.scene.robot.init_state.joint_pos = {".*": 0.0}
+    for _f in list(vars(cfg.rewards)):  # Isaac Lab G1 reward terms name joints this robot doesn't have
+        if not _f.startswith("_"):
+            setattr(cfg.rewards, _f, None)
+    for _f in ("add_base_mass", "base_com"):
+        if hasattr(cfg.events, _f):
+            setattr(cfg.events, _f, None)
 cfg.scene.robot.init_state.pos = (0.0, 0.0, -20.0)  # parked below the floor until posed
 cfg.terminations.time_out = None
 cfg.commands.base_velocity.debug_vis = False
@@ -157,18 +188,55 @@ def look_at(eye, target):
 
 
 class Motion:
-    def __init__(self, path):
+    """A recorded run. at(t) interpolates between the 20 ms control steps (position and joints linearly, rotation by
+    slerp), so frames at any rate get the in-between pose instead of snapping to the nearest step (judder).
+    cam_at(t) is the root path smoothed over +-cam_sigma s (Gaussian), for cameras only: the robot is posed exactly
+    as recorded, but the camera doesn't copy every step's sway."""
+
+    def __init__(self, path, cam_sigma=0.6):
         m = json.load(open(path))
         S = m["steps"]
+        self.names = m.get("joint_names")
         self.t = np.array([s["t"] for s in S])
         self.pos = np.array([s["pos"] for s in S])
         self.q = np.array([s["quat_xyzw"] for s in S])
         self.j = np.array([s["joints"] for s in S])
         self.end = float(self.t[-1])
+        x, y, z, w = self.q.T
+        yaw = np.unwrap(np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)))
+        dt = float(np.median(np.diff(self.t)))
+        r = max(1, int(3 * cam_sigma / dt))
+        ker = np.exp(-0.5 * (np.arange(-r, r + 1) * dt / cam_sigma) ** 2)
+        ker /= ker.sum()
+
+        def smooth(a):
+            pad = np.concatenate([np.full(r, a[0]), a, np.full(r, a[-1])])
+            return np.convolve(pad, ker, "valid")
+        self.cam_xy = np.stack([smooth(self.pos[:, 0]), smooth(self.pos[:, 1])], 1)
+        self.cam_yaw = smooth(yaw)
+
+    def _k(self, t):
+        k = int(np.clip(np.searchsorted(self.t, t) - 1, 0, len(self.t) - 2))
+        u = float(np.clip((t - self.t[k]) / max(self.t[k + 1] - self.t[k], 1e-9), 0.0, 1.0))
+        return k, u
 
     def at(self, t):
-        k = int(np.clip(np.searchsorted(self.t, t), 0, len(self.t) - 1))
-        return self.pos[k], self.q[k], self.j[k]
+        k, u = self._k(t)
+        q0, q1 = self.q[k], self.q[k + 1].copy()
+        d = float(np.dot(q0, q1))
+        if d < 0:
+            q1, d = -q1, -d
+        if d > 0.9995:
+            q = q0 + u * (q1 - q0)
+        else:
+            th = math.acos(d)
+            q = (math.sin((1 - u) * th) * q0 + math.sin(u * th) * q1) / math.sin(th)
+        q = q / np.linalg.norm(q)
+        return (1 - u) * self.pos[k] + u * self.pos[k + 1], q, (1 - u) * self.j[k] + u * self.j[k + 1]
+
+    def cam_at(self, t):
+        k, u = self._k(t)
+        return (1 - u) * self.cam_xy[k] + u * self.cam_xy[k + 1], (1 - u) * self.cam_yaw[k] + u * self.cam_yaw[k + 1]
 
 
 def pose_robots(hero, ghost, t, t_ghost):
@@ -181,6 +249,12 @@ def pose_robots(hero, ghost, t, t_ghost):
             continue
         p, q, j = m.at(tt)
         poses.append(list(p) + list(q))
+        if m.names is not None and list(m.names) != list(robot.joint_names):  # match by name; others at default
+            full = robot.data.default_joint_pos.torch[0].cpu().numpy().copy()
+            for i, nm in enumerate(robot.joint_names):
+                if nm in m.names:
+                    full[i] = j[m.names.index(nm)]
+            j = full
         joints.append(j)
     root = torch.tensor(np.array(poses), dtype=torch.float32, device="cuda:0")
     jp = torch.tensor(np.array(joints), dtype=torch.float32, device="cuda:0")
@@ -203,6 +277,10 @@ for _ in range(3):  # a few real steps so the physics views are live before any 
 for _ in range(60):  # let the scene stream in
     app.update()
 os.makedirs(args.out, exist_ok=True)
+_s0 = carb.settings.get_settings()
+RTX_DEFAULT = {k: _s0.get(k) for k in ("/rtx/post/histogram/enabled", "/rtx/post/tonemap/filmIso",
+                                       "/rtx/pathtracing/spp", "/rtx/pathtracing/totalSpp")}
+print("rtx defaults:", RTX_DEFAULT, flush=True)
 motions = {}
 for shot in shots:
     hero = motions.setdefault(shot["hero"], Motion(shot["hero"])) if shot.get("hero") else None
@@ -215,6 +293,10 @@ for shot in shots:
     if args.still:
         n = 1
     cam.GetFocalLengthAttr().Set(float(c.get("focal", 18.0)))
+    _st = carb.settings.get_settings()
+    for key, val in {**RTX_DEFAULT, **shot.get("rtx", {})}.items():  # per-shot renderer settings (post/exposure)
+        _st.set(key, val)
+    upd = int(shot.get("updates", args.updates))
     sm = {"eye": None, "tgt": None}
     log, w0 = [], time.time()
     for k in range(n):
@@ -222,11 +304,16 @@ for shot in shots:
         tg = t + float(shot.get("ghost_offset", 0.0))
         pose_robots(hero, ghost, t, tg)
         lead = hero if hero is not None else ghost
-        rp_, rq, _ = lead.at(t if hero is not None else tg)
+        tl = t if hero is not None else tg
+        rp_, rq, _ = lead.at(tl)
         ryaw = yaw_of(rq)
-        f = np.array([math.cos(ryaw), math.sin(ryaw), 0.0])
-        rgt = np.array([math.sin(ryaw), -math.cos(ryaw), 0.0])
-        body = np.array([rp_[0], rp_[1], 0.95])
+        if c.get("raw", False):  # old behaviour: the camera follows the raw root pose
+            cxy, cyaw = rp_[:2], ryaw
+        else:  # smoothed path: no step-by-step sway in the camera
+            cxy, cyaw = lead.cam_at(tl)
+        f = np.array([math.cos(cyaw), math.sin(cyaw), 0.0])
+        rgt = np.array([math.sin(cyaw), -math.cos(cyaw), 0.0])
+        body = np.array([cxy[0], cxy[1], 0.95])
         u = k / max(n - 1, 1)
         if c["mode"] == "fixed":
             eye = np.array(c["eye"], float) + u * np.array(c.get("eye_move", [0, 0, 0]), float)
@@ -249,6 +336,11 @@ for shot in shots:
             except Exception as e:  # noqa: BLE001
                 if k == 0:
                     print("raycast unavailable, plain follow camera:", e, flush=True)
+        elif c["mode"] == "rig":  # a camera carried along in the robot's (smoothed) frame, looking at the body
+            off = np.array(c.get("offset", [2.2, 1.2, 0.35]), float)  # forward, left, up from the body centre (m)
+            eye = body + f * off[0] - rgt * off[1] + np.array([0, 0, off[2]])
+            look = np.array(c.get("look", [0.3, 0.0, -0.1]), float)
+            tgt = body + f * look[0] - rgt * look[1] + np.array([0, 0, look[2]])
         elif c["mode"] == "pov":  # the robot's own head camera: level, 1.22 m, 0.1 m ahead of the base
             eye = np.array([rp_[0], rp_[1], 1.22]) + f * 0.10
             tgt = eye + f
@@ -257,11 +349,13 @@ for shot in shots:
             ctr = np.array(c.get("center", body), float)
             eye = ctr + np.array([c["radius"] * math.cos(ang), c["radius"] * math.sin(ang), c["height"]])
             tgt = ctr
-        a = c.get("smooth", 0.15) if sm["eye"] is not None else 1.0
+        a = c.get("smooth", 1.0 if not c.get("raw") else 0.15) if sm["eye"] is not None else 1.0
         sm["eye"] = eye if sm["eye"] is None else (1 - a) * sm["eye"] + a * eye
         sm["tgt"] = tgt if sm["tgt"] is None else (1 - a) * sm["tgt"] + a * tgt
         cam_op.Set(look_at(sm["eye"], sm["tgt"]))
-        for _ in range(args.updates if k else args.updates + 6):
+        # frame 0: extra updates; "preroll" lets the renderer settle first (exposure/streaming converged over ~120
+        # updates after launch in the 2026-11-20 walk test; frames before that came out overexposed)
+        for _ in range(upd if k else upd + 6 + int(shot.get("preroll", 0))):
             app.update()
         img = np.asarray(an.get_data())
         if img.ndim != 3:
@@ -270,6 +364,17 @@ for shot in shots:
                 img = np.asarray(an.get_data())
                 if img.ndim == 3:
                     break
+        if args.debug_settings:
+            _flat = {}
+            def _walk(pfx, d):
+                for kk, vv in (d or {}).items():
+                    (_walk if isinstance(vv, dict) else lambda a, b: _flat.__setitem__(a, b))(f"{pfx}/{kk}", vv)
+            for root in ("/rtx", "/rtx-transient"):
+                _walk(root, carb.settings.get_settings().get(root))
+            _prev = globals().get("_dbg_prev")
+            ch = {kk: (_prev.get(kk), vv) for kk, vv in _flat.items() if _prev is not None and _prev.get(kk) != vv} if _prev else {}
+            globals()["_dbg_prev"] = _flat
+            print(f"  dbg k {k} luma {img[..., :3].mean():.1f} changed {len(ch)} " + "; ".join(f"{kk}: {a!r} -> {b!r}" for kk, (a, b) in list(ch.items())[:12]), flush=True)
         Image.fromarray(np.ascontiguousarray(img[..., :3])).save(os.path.join(od, f"{k:05d}.jpg"), quality=94)
         dep = np.asarray(an_d.get_data(), np.float32).reshape(args.res, args.res)
         np.save(os.path.join(od, f"{k:05d}_d.npy"), dep[::4, ::4].astype(np.float16))
