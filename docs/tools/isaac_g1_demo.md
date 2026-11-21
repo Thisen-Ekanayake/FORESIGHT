@@ -78,3 +78,51 @@ tools/isaac/isaaclab_run.sh tools/isaac/g1_sonic.py --scene office --out results
 tools/isaac/isaaclab_run.sh tools/isaac/replay_render.py --scene office --robot sonic \
     --shots results/isaac/sonic/walk10_shot.json --out results/isaac/sonic/render --fps 30 --spp 64 --iso 14
 ```
+
+## Promo video "One Camera, No Map" (set up 2026-11-21, not yet run)
+
+Plan (approved 2026-11-21): https://claude.ai/artifact/LZFmCoQ5rUzfAYmhpG3ahY (draft 2). A 2:15 square video of the
+whole project. Every walk is a live FORESIGHT run walked by SONIC (`g1_live.py --walker sonic`), re-rendered path
+traced. Runbook (the laptop must be free; stop Athena first):
+
+```
+athena --stop
+tools/isaac/promo/live_runs.sh probe        # SONIC turn/walk check in the home, ~5 min
+python tools/isaac/promo/check_runs.py      # gait, turn rate, speed gain (adjust --sonic-speed-gain if far off)
+tools/isaac/promo/live_runs.sh mirror depth search   # the 7 FORESIGHT runs, ~1.5-2.5 h, resumable
+python tools/isaac/promo/check_runs.py      # each run vs what its segment needs
+python tools/isaac/promo/make_shots.py      # shot list timed from the runs' events + render estimate
+tools/isaac/promo/render.sh stills          # one still per shot, 32 vs 64 spp side by side (look check)
+tools/isaac/promo/render.sh full 32         # (or 64) every shot, resumable, ~12 h at 32 spp / ~23 h at 64
+python tools/make_promo_video.py --preview 40     # spot-check composed frames
+python tools/make_promo_video.py --scale 0.5      # 960x960 preview cut for sign-off
+python tools/make_promo_video.py                  # 1920x1920 master: results/isaac/promo/foresight_promo.mp4
+```
+
+| Segment | Live run(s) | Shots |
+|---|---|---|
+| Hook | `mirror_map` (depth-only, hallway mirror) + the existing phantom-room render (`results/isaac/phantom`) | `hook_dolly` + head-camera frames from `brain.pkl` |
+| One camera, two speeds | `search_v1` (the stretch before it finds the sofa: it is the run with live VLM looks) | `sys_front`, `sys_shoulder` |
+| Same robot, different depth | `depth_{gt,da,noise,nofs}` on A-study episode a-00808-04 | `depth_crane` (4 tinted robots, time-lapse), `depth_nofs_crash`, `depth_noise_stall`, a 2×2 grid of the depth each robot was given |
+| Mirror trap | `mirror_map`, `mirror_v1` (same start/goal as 2026-11-20) | `mirror_duel`, `mirror_check`, `mirror_exit` |
+| Find the sofa, then the bed | `search_v1` (episode mirror-sofa-bed) | `search_lapse` (time-lapse) |
+| End card | `search_v1` final pose | `end_pull` |
+
+What the promo does and doesn't claim (keep these true when it is run):
+
+- **The depth episode was picked.** a-00808-04 is the only A-study episode on 00808's main floor where the four
+  depth sources did what the aggregate says (GT and DA reached, GT + 10% noise timed out, uncalibrated DA crashed at
+  21 s). The G1 re-runs must show the same pattern (`check_runs.py`); if not, try a-00808-07 / -03
+  (`live_runs.sh depth_alt`) and say so. Its settings are the study's (0.35 m/s, 0.36 m success, 130 s, noise seeded
+  by episode name). On-screen percentages and AbsRel values are the study's, not this episode's.
+- **Walking**: FORESIGHT's (forward, turn) command each tick, turned into a walk by SONIC
+  (`tools/isaac/sonic_walker.py`: slow_walk at the commanded speed × `--sonic-speed-gain`, idle + facing angle for
+  turning on the spot, the commanded heading kept within 0.8 rad of the actual one). SONIC runs on the CPU in these
+  runs (GPU memory); the world is paused while the brain thinks, so that changes wall time only.
+- **Walking is shown at real speed** except the two time-lapses, which are labelled with their speed-up.
+- **System segment**: the "fast" rate and "slow" look interval on screen are the run's medians; the point cloud is
+  the depth the navigator was given (floor-calibrated), back-projected, hidden behind the render's own depth.
+- The mirror segment says nothing about averages (the 2026-11-20 caveats above still apply: Habitat perception at
+  home, impassable confirmed walls).
+- Credit: NVIDIA GEAR-SONIC (NVIDIA Open Model License) on the end card; music "Ascending the Vale" (Kevin MacLeod,
+  CC BY 4.0).

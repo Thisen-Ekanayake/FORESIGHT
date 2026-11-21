@@ -14,6 +14,9 @@ physics control step, the camera pose and the brain's answer every tick.
   # terminal 2 (Isaac Lab env): /ml/IsaacLab/env_isaaclab/bin/python tools/isaac/g1_live.py \
   #       --scene office --start 1.0 2.0 90 --goal 6.0 2.0 --cond foresight --out results/isaac/live/office_fs
   # --probe: no brain; the G1 walks a fixed command (forward/turn) and saves head-camera stills (walking check).
+  # --walker sonic: NVIDIA GEAR-SONIC walks the G1 from the same (forward, turn) commands (natural gait).
+  # --task search --instructions sofa bed: object search (FORESIGHT v1's, as in tools/run_object_search.py).
+  # --depth gt | gt:noise=0.1 | da [--no-floor-scale]: the depth the brain's navigator is given (the A study).
 
 Coordinates: Isaac world, z up, metres; yaw in degrees (0 = +x). The brain works in Habitat's frame
 (y up, forward -z): Habitat (x, y, z) = Isaac (x, z, -y).
@@ -71,6 +74,23 @@ parser.add_argument("--perception", default="isaac", choices=["isaac", "habitat"
                          "the same HM3D scan at the robot's pose (leaves the GPU to full-precision Qwen)")
 parser.add_argument("--physics-device", default="cuda:0", help="cpu frees GPU memory for the brain's VLM")
 parser.add_argument("--realtime-render", action="store_true", help="RTX real-time for the head camera (default)")
+parser.add_argument("--walker", default="isaaclab", choices=["isaaclab", "sonic"],
+                    help="isaaclab: NVIDIA's pretrained Isaac Lab G1 policy (the 2026-11-20 runs); sonic: NVIDIA GEAR-SONIC's "
+                         "planner + tracking policy on SONIC's own G1 (tools/isaac/sonic_walker.py), human-like gait")
+parser.add_argument("--wbc", default="/ml/GR00T-WholeBodyControl", help="sonic: GR00T-WholeBodyControl checkout")
+parser.add_argument("--sonic-seed", type=int, default=1234, help="sonic: planner random seed")
+parser.add_argument("--sonic-speed-gain", type=float, default=0.77,
+                    help="sonic: FORESIGHT speed x this = SONIC slow_walk speed setting (it overshoots its setting)")
+parser.add_argument("--sonic-cpu", action="store_true", help="sonic: run the ONNX planner/policy on the CPU (GPU memory)")
+parser.add_argument("--task", default="pointnav", choices=["pointnav", "search"],
+                    help="search: object search (--instructions, no goal coordinates); ends when the brain says done")
+parser.add_argument("--instructions", nargs="*", default=["sofa", "bed"], help="search: objects to find, in order")
+parser.add_argument("--depth", default="da",
+                    help="depth the brain's navigator is given (foresight.perception.depth.sources): da | gt | "
+                         "gt:noise=0.1 ... (non-da needs --perception habitat: ground truth from Habitat's render)")
+parser.add_argument("--no-floor-scale", action="store_true", help="brain: FloorScale calibration off (the A study's map_nofs)")
+parser.add_argument("--depth-seed", type=int, default=0,
+                    help="seed of injected depth noise (the A study seeds by episode: int(sha1(name)[:8], 16))")
 args, _ = parser.parse_known_args()
 
 from isaaclab.app import AppLauncher  # noqa: E402
@@ -123,64 +143,73 @@ def yaw_quat_xyzw(yaw):
     return (0.0, 0.0, math.sin(yaw / 2), math.cos(yaw / 2))
 
 
-# ---------------------------------------------------------------- env config: Isaac Lab's own G1 flat (play) env
-cfg = parse_env_cfg(TASK, device=args.physics_device, num_envs=1)
-cfg.scene.num_envs = 1
-cfg.scene.env_spacing = 0.0
-if args.policy == "rough":  # the rough policy on flat ground: plane terrain (its height scan then reads a flat floor)
-    cfg.scene.terrain.terrain_type = "plane"
-    cfg.scene.terrain.terrain_generator = None
-    if getattr(cfg.curriculum, "terrain_levels", None) is not None:
-        cfg.curriculum.terrain_levels = None
-cfg.scene.robot.spawn.usd_path = f"{A}/Isaac/IsaacLab/Robots/Unitree/G1/g1.usd"
-x0, y0, yaw0 = args.start[0], args.start[1], math.radians(args.start[2])
-cfg.scene.robot.init_state.pos = (x0, y0, 0.74)
-cfg.scene.robot.init_state.rot = yaw_quat_xyzw(yaw0)
-# deterministic start: no random base pose / joint offsets / pushes, no resets
-cfg.events.reset_base.params["pose_range"] = {"x": (0.0, 0.0), "y": (0.0, 0.0), "yaw": (0.0, 0.0)}
-cfg.events.reset_base.params["velocity_range"] = {k: (0.0, 0.0) for k in ("x", "y", "z", "roll", "pitch", "yaw")}
-for name in ("push_robot", "base_external_force_torque"):
-    if hasattr(cfg.events, name):
-        setattr(cfg.events, name, None)
-cfg.terminations.time_out = None
-cfg.terminations.base_contact = None
-cfg.episode_length_s = 1.0e6
-cmd = cfg.commands.base_velocity
-cmd.resampling_time_range = (1.0e6, 1.0e6)
-cmd.heading_command = False
-cmd.rel_standing_envs = 0.0
-cmd.rel_heading_envs = 0.0
-cmd.debug_vis = False
-cfg.observations.policy.enable_corruption = False
-cfg.sim.render_interval = cfg.decimation  # render once per control step
-# PhysX's GPU buffers default to sizes for thousands of parallel training robots (~2.5 GB); one robot needs a sliver,
-# and the freed memory lets the brain keep Qwen3-VL on the same 8 GB GPU.
-_px = cfg.sim.physics
-for _k, _v in dict(gpu_max_rigid_contact_count=2**19, gpu_max_rigid_patch_count=2**16, gpu_found_lost_pairs_capacity=2**18,
-                   gpu_found_lost_aggregate_pairs_capacity=2**20, gpu_total_aggregate_pairs_capacity=2**18,
-                   gpu_collision_stack_size=2**24, gpu_heap_capacity=2**24, gpu_temp_buffer_capacity=2**22,
-                   gpu_max_soft_body_contacts=2**10, gpu_max_particle_contacts=2**10).items():
-    if hasattr(_px, _k):
-        setattr(_px, _k, _v)
-# the scene: NVIDIA's USD (with its own colliders); the terrain plane stays as the physics floor
-if args.scene != "none" and args.set_mode == "cfg":
-    usd, off = SCENES[args.scene]
-    cfg.scene.stage_set = AssetBaseCfg(prim_path="/World/Set", spawn=sim_utils.UsdFileCfg(usd_path=usd),
-                                       init_state=AssetBaseCfg.InitialStateCfg(pos=off))
-env = ManagerBasedRLEnv(cfg)
-if args.scene != "none" and args.set_mode == "ref":
-    from pxr import Gf, UsdGeom
-    usd, off = SCENES[args.scene]
-    _p = env.sim.stage.DefinePrim("/World/Set", "Xform")
-    _p.GetReferences().AddReference(usd)
-    if any(off):
-        UsdGeom.XformCommonAPI(_p).SetTranslate(Gf.Vec3d(*off))
+if args.walker == "isaaclab":
+    # ---------------------------------------------------------------- env config: Isaac Lab's own G1 flat (play) env
+    cfg = parse_env_cfg(TASK, device=args.physics_device, num_envs=1)
+    cfg.scene.num_envs = 1
+    cfg.scene.env_spacing = 0.0
+    if args.policy == "rough":  # the rough policy on flat ground: plane terrain (its height scan then reads a flat floor)
+        cfg.scene.terrain.terrain_type = "plane"
+        cfg.scene.terrain.terrain_generator = None
+        if getattr(cfg.curriculum, "terrain_levels", None) is not None:
+            cfg.curriculum.terrain_levels = None
+    cfg.scene.robot.spawn.usd_path = f"{A}/Isaac/IsaacLab/Robots/Unitree/G1/g1.usd"
+    x0, y0, yaw0 = args.start[0], args.start[1], math.radians(args.start[2])
+    cfg.scene.robot.init_state.pos = (x0, y0, 0.74)
+    cfg.scene.robot.init_state.rot = yaw_quat_xyzw(yaw0)
+    # deterministic start: no random base pose / joint offsets / pushes, no resets
+    cfg.events.reset_base.params["pose_range"] = {"x": (0.0, 0.0), "y": (0.0, 0.0), "yaw": (0.0, 0.0)}
+    cfg.events.reset_base.params["velocity_range"] = {k: (0.0, 0.0) for k in ("x", "y", "z", "roll", "pitch", "yaw")}
+    for name in ("push_robot", "base_external_force_torque"):
+        if hasattr(cfg.events, name):
+            setattr(cfg.events, name, None)
+    cfg.terminations.time_out = None
+    cfg.terminations.base_contact = None
+    cfg.episode_length_s = 1.0e6
+    cmd = cfg.commands.base_velocity
+    cmd.resampling_time_range = (1.0e6, 1.0e6)
+    cmd.heading_command = False
+    cmd.rel_standing_envs = 0.0
+    cmd.rel_heading_envs = 0.0
+    cmd.debug_vis = False
+    cfg.observations.policy.enable_corruption = False
+    cfg.sim.render_interval = cfg.decimation  # render once per control step
+    # PhysX's GPU buffers default to sizes for thousands of parallel training robots (~2.5 GB); one robot needs a sliver,
+    # and the freed memory lets the brain keep Qwen3-VL on the same 8 GB GPU.
+    _px = cfg.sim.physics
+    for _k, _v in dict(gpu_max_rigid_contact_count=2**19, gpu_max_rigid_patch_count=2**16, gpu_found_lost_pairs_capacity=2**18,
+                       gpu_found_lost_aggregate_pairs_capacity=2**20, gpu_total_aggregate_pairs_capacity=2**18,
+                       gpu_collision_stack_size=2**24, gpu_heap_capacity=2**24, gpu_temp_buffer_capacity=2**22,
+                       gpu_max_soft_body_contacts=2**10, gpu_max_particle_contacts=2**10).items():
+        if hasattr(_px, _k):
+            setattr(_px, _k, _v)
+    # the scene: NVIDIA's USD (with its own colliders); the terrain plane stays as the physics floor
+    if args.scene != "none" and args.set_mode == "cfg":
+        usd, off = SCENES[args.scene]
+        cfg.scene.stage_set = AssetBaseCfg(prim_path="/World/Set", spawn=sim_utils.UsdFileCfg(usd_path=usd),
+                                           init_state=AssetBaseCfg.InitialStateCfg(pos=off))
+    env = ManagerBasedRLEnv(cfg)
+    STAGE = env.sim.stage
+    if args.scene != "none" and args.set_mode == "ref":
+        from pxr import Gf, UsdGeom
+        usd, off = SCENES[args.scene]
+        _p = STAGE.DefinePrim("/World/Set", "Xform")
+        _p.GetReferences().AddReference(usd)
+        if any(off):
+            UsdGeom.XformCommonAPI(_p).SetTranslate(Gf.Vec3d(*off))
+else:  # NVIDIA GEAR-SONIC on SONIC's own G1, in a plain simulation (tools/isaac/sonic_walker.py)
+    from sonic_walker import PHYSX_SMALL, SonicWorld  # noqa: F401
+    _usd = SCENES[args.scene][0] if args.scene != "none" else None
+    world = SonicWorld(wbc=args.wbc, root=ROOT, scene_usd=_usd, start=(args.start[0], args.start[1], math.radians(args.start[2])),
+                       device=args.physics_device, seed=args.sonic_seed, gpu_onnx=not args.sonic_cpu,
+                       speed_gain=args.sonic_speed_gain)
+    STAGE = world.stage
 if args.scene != "none":
     # NVIDIA's scenes keep their ceiling lights inside USD instances, which RTX doesn't light from: un-instance just
     # the instances that contain a light, so the scene is lit as designed.
     from pxr import Usd, UsdLux
     _roots = set()
-    for _p in Usd.PrimRange(env.sim.stage.GetPrimAtPath("/World"), Usd.TraverseInstanceProxies()):
+    for _p in Usd.PrimRange(STAGE.GetPrimAtPath("/World"), Usd.TraverseInstanceProxies()):
         if _p.IsInstanceProxy() and _p.HasAPI(UsdLux.LightAPI):
             _a = _p.GetParent()
             while _a and not _a.IsInstance():
@@ -188,7 +217,7 @@ if args.scene != "none":
             if _a:
                 _roots.add(str(_a.GetPath()))
     for _r in _roots:
-        env.sim.stage.GetPrimAtPath(_r).SetInstanceable(False)
+        STAGE.GetPrimAtPath(_r).SetInstanceable(False)
     print(f"un-instanced {len(_roots)} prims holding lights", flush=True)
 # Extra soft ceiling panels (lighting only, no geometry): NVIDIA's office leaves its glass meeting rooms dark, so the
 # glass reads as black instead of glass. (x0, y0, x1, y1) areas get a grid of downward rect lights at z = 2.7 m.
@@ -199,7 +228,7 @@ if args.extra_lights == "auto" and args.scene in EXTRA_LIGHTS:
     for (x0, y0, x1, y1) in EXTRA_LIGHTS[args.scene]:
         for xx in np.arange(x0 + 1.2, x1, 2.4):
             for yy in np.arange(y0 + 1.2, y1, 2.4):
-                L = UsdLux.RectLight.Define(env.sim.stage, f"/World/ExtraLights/L{_n}")
+                L = UsdLux.RectLight.Define(STAGE, f"/World/ExtraLights/L{_n}")
                 L.CreateWidthAttr(1.2)
                 L.CreateHeightAttr(1.2)
                 L.CreateIntensityAttr(9000.0 * args.light_scale)
@@ -209,35 +238,39 @@ if args.extra_lights == "auto" and args.scene in EXTRA_LIGHTS:
     print(f"extra ceiling lights: {_n}", flush=True)
 if args.scene != "none" and os.environ.get("G1_HIDE_GROUND", "1") == "1":  # hide the terrain plane's visual where a scene provides its own floor
     from pxr import UsdGeom
-    stage = env.sim.stage
+    stage = STAGE
     for p in stage.Traverse():
         if str(p.GetPath()).startswith("/World/ground") and p.IsA(UsdGeom.Gprim):
             UsdGeom.Imageable(p).MakeInvisible()
-# NVIDIA's pretrained actor (rsl_rl 5 format): ELU MLP (flat 123 -> 256 -> 128 -> 128 -> 37; rough 310 -> 512 -> 256 ->
-# 128 -> 37), no observation normalization; deterministic action = the MLP's mean. Layer sizes come from the checkpoint.
-_sd = torch.load(CKPT, map_location=args.physics_device, weights_only=False)["actor_state_dict"]
-_W = [_sd[f"mlp.{i}.weight"] for i in (0, 2, 4, 6)]
-_layers = []
-for _i, _w in enumerate(_W):
-    _layers += [torch.nn.Linear(_w.shape[1], _w.shape[0])] + ([torch.nn.ELU()] if _i < 3 else [])
-policy = torch.nn.Sequential(*_layers).to(args.physics_device).eval()
-policy.load_state_dict({k[len("mlp."):]: v for k, v in _sd.items() if k.startswith("mlp.")})
+if args.walker == "isaaclab":
+    # NVIDIA's pretrained actor (rsl_rl 5 format): ELU MLP (flat 123 -> 256 -> 128 -> 128 -> 37; rough 310 -> 512 -> 256 ->
+    # 128 -> 37), no observation normalization; deterministic action = the MLP's mean. Layer sizes come from the checkpoint.
+    _sd = torch.load(CKPT, map_location=args.physics_device, weights_only=False)["actor_state_dict"]
+    _W = [_sd[f"mlp.{i}.weight"] for i in (0, 2, 4, 6)]
+    _layers = []
+    for _i, _w in enumerate(_W):
+        _layers += [torch.nn.Linear(_w.shape[1], _w.shape[0])] + ([torch.nn.ELU()] if _i < 3 else [])
+    policy = torch.nn.Sequential(*_layers).to(args.physics_device).eval()
+    policy.load_state_dict({k[len("mlp."):]: v for k, v in _sd.items() if k.startswith("mlp.")})
 
 
-class _Env:
-    """Minimal stepping wrapper: policy observations in, joint-position actions out (as Isaac Lab's rsl_rl wrapper)."""
+    class _Env:
+        """Minimal stepping wrapper: policy observations in, joint-position actions out (as Isaac Lab's rsl_rl wrapper)."""
 
-    def get_observations(self):
-        return env.observation_manager.compute()["policy"]
+        def get_observations(self):
+            return env.observation_manager.compute()["policy"]
 
-    def step(self, act):
-        obs, rew, term_, trunc, extras = env.step(act)
-        return obs["policy"], rew, term_, extras
+        def step(self, act):
+            obs, rew, term_, trunc, extras = env.step(act)
+            return obs["policy"], rew, term_, extras
 
 
-venv = _Env()
+    venv = _Env()
 
-robot = env.scene["robot"]
+    robot = env.scene["robot"]
+else:
+    robot = world.robot
+
 
 
 class RepCam:
@@ -248,7 +281,7 @@ class RepCam:
         import omni.replicator.core as rep
         from pxr import Gf, UsdGeom
         self.Gf = Gf
-        cam = UsdGeom.Camera.Define(env.sim.stage, path)
+        cam = UsdGeom.Camera.Define(STAGE, path)
         cam.CreateFocalLengthAttr(focal)
         cam.CreateHorizontalApertureAttr(20.955)
         cam.CreateVerticalApertureAttr(20.955 * h / w)
@@ -290,8 +323,11 @@ class RepCam:
 RENDER = args.perception == "isaac"
 head = RepCam("/World/HeadCam", 640, 640, 10.5, depth=True) if RENDER else None
 chase = RepCam("/World/ChaseCam", 1920, 1080, 18.0) if (args.chase is not None and RENDER) else None
-term = env.command_manager.get_term("base_velocity")
-dt_ctrl = env.step_dt  # 0.02 s
+if args.walker == "isaaclab":
+    term = env.command_manager.get_term("base_velocity")
+    dt_ctrl = env.step_dt  # 0.02 s
+else:
+    term, dt_ctrl = None, world.dt
 print(f"G1: {len(robot.joint_names)} joints, control dt {dt_ctrl:.3f} s, scene {args.scene}", flush=True)
 
 
@@ -302,7 +338,8 @@ def root_pose():
     return p[:3], yaw, p[3:]
 
 
-log = {"args": vars(args), "joint_names": list(robot.joint_names), "dt": dt_ctrl, "steps": [], "ticks": []}
+log = {"args": vars(args), "joint_names": list(robot.joint_names), "dt": dt_ctrl, "steps": [], "ticks": [],
+       "robot": "sonic_g1" if args.walker == "sonic" else "isaaclab_g1"}
 t_sim = [0.0]
 
 
@@ -315,18 +352,28 @@ def control_step(v, w, obs):
         _cmd[0] += a * (v - _cmd[0])
         _cmd[1] += a * (w - _cmd[1])
         v, w = _cmd
-    term.vel_command_b[:, 0] = v
-    term.vel_command_b[:, 1] = 0.0
-    term.vel_command_b[:, 2] = w
-    with torch.inference_mode():
-        act = policy(obs)
-        obs, _, _, _ = venv.step(act)
+    if args.walker == "sonic":  # SONIC plans the walk from (v, w); see tools/isaac/sonic_walker.py
+        world.step(float(v), float(w))
+    else:
+        term.vel_command_b[:, 0] = v
+        term.vel_command_b[:, 1] = 0.0
+        term.vel_command_b[:, 2] = w
+        with torch.inference_mode():
+            act = policy(obs)
+            obs, _, _, _ = venv.step(act)
     t_sim[0] += dt_ctrl
     pos, yaw, q = root_pose()
     log["steps"].append({"t": round(t_sim[0], 4), "pos": pos.round(5).tolist(), "quat_xyzw": q.round(6).tolist(),
                          "joints": robot.data.joint_pos.torch[0].cpu().numpy().round(5).tolist(),
                          "cmd": [round(float(v), 4), round(float(w), 4)]})
+    if args.walker == "sonic":
+        log["steps"][-1]["sonic"] = [world.last[0], round(world.last[1], 3), round(world.psi, 4)]
     return obs
+
+
+def close_world():
+    if args.walker == "isaaclab":
+        env.close()
 
 
 def look():
@@ -360,7 +407,7 @@ for k in range(args.warmup if RENDER else 0):  # let RTX load the scene's geomet
     if k % 100 == 99:
         _r, _d, _, _ = look()
         print(f"  warm-up {k + 1}: depth ahead {np.median(_d[260:380, 220:420]):.2f} m, {time.time() - _w0:.0f} s", flush=True)
-obs = venv.get_observations()
+obs = venv.get_observations() if args.walker == "isaaclab" else None
 for _ in range(50):  # settle: stand for 1 s
     obs = control_step(0.0, 0.0, obs)
 
@@ -374,7 +421,7 @@ if args.profile is not None:  # scripted command profile, no brain: walking-qual
     log["result"] = f"profile done at {t_sim[0]:.1f} s"
     print(f"profile done: {t_sim[0]:.1f} s, z {pos[2]:.2f} m, at {pos.round(2)} yaw {math.degrees(yaw):.1f}", flush=True)
     json.dump(log, open(os.path.join(args.out, "motion.json"), "w"))
-    env.close()
+    close_world()
     app.close()
     sys.exit(0)
 
@@ -396,24 +443,30 @@ if args.probe is not None:
     pos, yaw, _ = root_pose()
     print(f"probe done: z {pos[2]:.2f} m (standing ~0.7), moved to {pos.round(2)}", flush=True)
     json.dump(log, open(os.path.join(args.out, "motion.json"), "w"))
-    env.close()
+    close_world()
     app.close()
     sys.exit(0)
 
 # ---------------------------------------------------------------- closed loop with the brain
-goal = np.array(args.goal, float)
-sock = socket.create_connection(("127.0.0.1", args.port))
+SEARCH = args.task == "search"
 start_pos, _, _ = root_pose()
+# object search has no goal coordinates: the bearing is unused there and the run ends when the brain says done
+goal = np.array(start_pos[:2] if SEARCH else args.goal, float)
+if args.depth != "da" and RENDER:
+    raise SystemExit("--depth other than da needs --perception habitat (ground truth comes from Habitat's render)")
+sock = socket.create_connection(("127.0.0.1", args.port))
 wire.send(sock, {"type": "reset", "cond": args.cond, "start_xz": [start_pos[0], -start_pos[1]],
                  "goal_xz": [goal[0], -goal[1]], "cam_height_m": args.cam_height, "hazard_labels": args.labels,
                  "max_linear_mps": args.max_linear, "robust_scan": False, "guard": "fill",
                  "log_path": os.path.join(os.path.abspath(args.out), "brain.pkl"),
+                 "task": args.task, "instructions": args.instructions, "depth": args.depth,
+                 "no_floor_scale": bool(args.no_floor_scale), "seed": args.depth_seed,
                  **({"habitat_scene": "00808-y9hTuugGdiq", "habitat_floor_y": 0.0614} if not RENDER else {})})
 wire.recv(sock)
 result, contact_t, w0 = "timeout", None, time.time()
 while t_sim[0] < args.max_sim_s:
     pos, yaw, _ = root_pose()
-    if np.hypot(*(goal - pos[:2])) < args.success_m:
+    if not SEARCH and np.hypot(*(goal - pos[:2])) < args.success_m:
         result = f"reached at {t_sim[0]:.1f} s"
         break
     if pos[2] < 0.45:
@@ -435,7 +488,8 @@ while t_sim[0] < args.max_sim_s:
         gt_ahead = float(r.get("gt_ahead_m", 99.0))
     log["ticks"].append({"t": round(t_sim[0], 4), "cam_pos": cpos.round(4).tolist(), "yaw": round(yaw, 5),
                          "gt_ahead_m": round(gt_ahead, 3), **{k: r.get(k) for k in ("linear", "angular", "tick_ms",
-                                                                                     "safety", "event")}})
+                                                                                     "safety", "event", "mode",
+                                                                                     "target", "found")}})
     if contact_t is None and gt_ahead < args.contact_m and r["linear"] > 0.02:
         contact_t = t_sim[0]
         result = f"crash at {t_sim[0]:.1f} s"
@@ -449,6 +503,11 @@ while t_sim[0] < args.max_sim_s:
         obs = control_step(r["linear"], -r["angular"], obs)
     if contact_t is not None and t_sim[0] - contact_t > args.after_contact_s:
         break
+    if SEARCH and r.get("done") and contact_t is None:
+        result = f"search {r.get('mode', 'done')} at {t_sim[0]:.1f} s, found {[f[1] for f in (r.get('found') or [])]}"
+        for _ in range(int(round(1.5 / dt_ctrl))):  # stand for 1.5 s at the end (the end card's pull-back)
+            obs = control_step(0.0, 0.0, obs)
+        break
 
 pos, _, _ = root_pose()
 log["result"] = result
@@ -457,5 +516,5 @@ wire.send(sock, {"type": "end", "result": result})
 wire.recv(sock)
 json.dump(log, open(os.path.join(args.out, "motion.json"), "w"))
 print(f"{args.scene} {args.cond}: {result}; {len(log['ticks'])} ticks, {len(log['steps'])} control steps", flush=True)
-env.close()
+close_world()
 app.close()

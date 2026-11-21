@@ -12,11 +12,9 @@ Profile segments: [seconds, mode, speed (-1 = mode default), heading_deg (world 
 (the heading ramps linearly within a segment). Modes: idle, slow_walk, walk, run.
 """
 import argparse
-import importlib.util
 import json
 import math
 import os
-import re
 import sys
 import time
 
@@ -51,20 +49,9 @@ os.makedirs(args.out, exist_ok=True)
 segs = json.load(open(args.profile)) if os.path.exists(args.profile) else json.loads(args.profile)
 
 
-# ------------------------------------------------------------------ SONIC's G1, with mesh paths made absolute
 def sonic_robot_cfg():
-    desc = os.path.join(args.wbc, "gear_sonic/data/assets/robot_description")
-    urdf_dir = os.path.join(ROOT, "results/isaac/sonic/robot")
-    os.makedirs(urdf_dir, exist_ok=True)
-    src = open(os.path.join(desc, "urdf/g1/main.urdf")).read()
-    urdf = os.path.join(urdf_dir, "g1_sonic.urdf")
-    open(urdf, "w").write(re.sub(r"package://robot_description/", desc + "/", src))
-    spec = importlib.util.spec_from_file_location("sonic_g1", os.path.join(args.wbc, "gear_sonic/envs/manager_env/robots/g1.py"))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    cfg = mod.G1_CYLINDER_MODEL_12_DEX_CFG.replace(prim_path="/World/Robot")
-    cfg.spawn.asset_path = urdf
-    return cfg
+    from sonic_walker import robot_cfg
+    return robot_cfg(args.wbc, ROOT)
 
 
 sim = sim_utils.SimulationContext(sim_utils.SimulationCfg(dt=0.005, render_interval=4, device="cuda:0"))

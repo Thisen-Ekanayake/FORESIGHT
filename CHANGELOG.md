@@ -3,6 +3,27 @@
 Notable changes to FORESIGHT, newest first. Day-by-day working notes live in `logs/` (untracked);
 milestone status in `PROGRESS.md`.
 
+## [Unreleased] — Promo video "One Camera, No Map": live SONIC runs and compositor (2026-11-21, set up, not run)
+
+### Added
+- `tools/isaac/sonic_walker.py`: `SonicWorld`, SONIC's G1 in a plain Isaac Lab sim driven by FORESIGHT's
+  (forward, turn) command (slow_walk at speed × gain, idle + facing angle to turn on the spot, heading lead clamp);
+  `robot_cfg()` shared with `g1_sonic.py`.
+- `tools/isaac/g1_live.py`: `--walker sonic` (+ `--sonic-speed-gain`, `--sonic-cpu`, `--sonic-seed`, `--wbc`),
+  `--task search --instructions ...` (object search; ends when the brain reports done), `--depth`, `--no-floor-scale`,
+  `--depth-seed` (the A study's depth sources and seeding, passed to the brain). Defaults unchanged.
+- `tools/isaac/foresight_brain.py`: depth sources other than Depth Anything (`gt`, `gt:noise=0.1`, ...) on Habitat's
+  ground truth, FloorScale off, and object search (baseline / FORESIGHT v1, as `tools/run_object_search.py`).
+- `tools/isaac/replay_render.py`: `"ghosts": [{motion, tint, opacity, offset}]` for several translucent robots per
+  shot (one env each); frames.json logs every robot's pose. The single `"ghost"` still works.
+- `tools/isaac/promo/`: `live_runs.sh` (resumable live runs by stage, GPU check), `check_runs.py` (gait, speed gain,
+  each run vs its segment), `make_shots.py` (shot list timed from the runs' events, render estimate), `render.sh`
+  (32 vs 64 spp stills, resumable per-shot full render).
+- `tools/make_promo_video.py` + `foresight.viz.promo_video`: the narrated 1920² compositor (point cloud and growing
+  map from the brain's own depth, hidden behind the render's depth; plan path; VLM label; four-robot depth grid;
+  mirror check; time-lapse search with the spoken goal as on-screen words; end card with the SONIC credit;
+  `--preview T`, `--scale 0.5`).
+
 ## [Unreleased] — G1 walking-quality fixes for Isaac renders (2026-11-20)
 
 ### Added

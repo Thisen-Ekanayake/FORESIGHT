@@ -2,7 +2,9 @@
 joint for joint, path traced, with scripted cinematic cameras. Nothing about the motion is changed: each frame sets
 the robot's recorded root pose and 37 joint positions (nearest 20 ms control step) and only renders.
 
-Two robots can share a shot: env_0 = "hero", env_1 = "ghost" (drawn translucent, the depth-only run).
+Two robots can share a shot: env_0 = "hero", env_1 = "ghost" (drawn translucent, the depth-only run). Or several:
+"ghosts": [{"motion": "...motion.json", "tint": [r, g, b], "opacity": 0.45, "offset": 0.0}, ...] puts each run on
+its own env (1, 2, ...), each drawn translucent in its own tint ("hero" may then be null).
 
   tools/isaac/isaaclab_run.sh tools/isaac/replay_render.py --scene hm3d --shots shots.json --out results/isaac/film/home
 
@@ -88,10 +90,24 @@ EXTRA_LIGHTS = {"office": [(-10.6, 35.5, -5.4, 48.5), (-16.5, 34.5, -11.4, 49.0)
 shots = json.load(open(args.shots))
 if args.only:
     shots = [s for s in shots if s["name"] in args.only]
-need_ghost = any(s.get("ghost") for s in shots)
 
-cfg = parse_env_cfg("Isaac-Velocity-Flat-G1-Play-v0", device="cuda:0", num_envs=2 if need_ghost else 1)
-cfg.scene.num_envs = 2 if need_ghost else 1
+
+def ghost_list(shot):
+    """The shot's translucent robots: [{"motion", "tint", "opacity", "offset"}] (legacy "ghost" = one cyan ghost)."""
+    if shot.get("ghosts"):
+        return [dict({"tint": [0.35, 0.8, 1.0], "opacity": 0.38, "offset": 0.0}, **g) for g in shot["ghosts"]]
+    if shot.get("ghost"):
+        return [{"motion": shot["ghost"], "tint": [0.35, 0.8, 1.0], "opacity": 0.38,
+                 "offset": float(shot.get("ghost_offset", 0.0))}]
+    return []
+
+
+N_GHOST = max([len(ghost_list(s)) for s in shots] + [0])
+need_ghost = N_GHOST > 0
+N_ENV = 1 + N_GHOST
+
+cfg = parse_env_cfg("Isaac-Velocity-Flat-G1-Play-v0", device="cuda:0", num_envs=N_ENV)
+cfg.scene.num_envs = N_ENV
 cfg.scene.env_spacing = 0.0
 cfg.scene.robot.spawn.usd_path = f"{A}/Isaac/IsaacLab/Robots/Unitree/G1/g1.usd"
 if args.robot == "sonic":  # posed only (gravity off), so one stiff implicit actuator for every joint is enough
@@ -148,10 +164,12 @@ for p in stage.Traverse():
     if str(p.GetPath()).startswith("/World/ground") and p.IsA(UsdGeom.Gprim):
         UsdGeom.Imageable(p).MakeInvisible()
 
-# ghost material: translucent cyan hologram on every mesh of env_1's robot
-if need_ghost:
-    gm = UsdShade.Material.Define(stage, "/World/Looks/Ghost")
-    sh = UsdShade.Shader.Define(stage, "/World/Looks/Ghost/Surface")
+# ghost materials: a translucent hologram on every mesh of env_i's robot (i >= 1). One material per env; its tint
+# and opacity are set per shot (set_ghost_look), so the cyan ghost and the four coloured depth robots share a launch.
+GHOST_SH = []
+for _i in range(1, N_ENV):
+    gm = UsdShade.Material.Define(stage, f"/World/Looks/Ghost{_i}")
+    sh = UsdShade.Shader.Define(stage, f"/World/Looks/Ghost{_i}/Surface")
     sh.CreateIdAttr("UsdPreviewSurface")
     sh.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(0.35, 0.8, 1.0))
     sh.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(0.12, 0.45, 0.7))
@@ -160,8 +178,17 @@ if need_ghost:
     gm.CreateSurfaceOutput().ConnectToSource(sh.ConnectableAPI(), "surface")
     # bound on the robot root, stronger than descendants: reaches the instanced meshes without un-instancing them
     # (changing instancing after the env starts invalidates the physics views)
-    groot = stage.GetPrimAtPath("/World/envs/env_1/Robot")
+    groot = stage.GetPrimAtPath(f"/World/envs/env_{_i}/Robot")
     UsdShade.MaterialBindingAPI.Apply(groot).Bind(gm, UsdShade.Tokens.strongerThanDescendants)
+    GHOST_SH.append(sh)
+
+
+def set_ghost_look(ghosts):
+    for sh_, g in zip(GHOST_SH, ghosts):
+        r, g_, b = (float(v) for v in g["tint"])
+        sh_.GetInput("diffuseColor").Set(Gf.Vec3f(r, g_, b))
+        sh_.GetInput("emissiveColor").Set(Gf.Vec3f(0.35 * r, 0.55 * g_, 0.7 * b))
+        sh_.GetInput("opacity").Set(float(g["opacity"]))
 
 # camera (Replicator render product: the Kit RTX path)
 cam = UsdGeom.Camera.Define(stage, "/World/FilmCam")
@@ -239,13 +266,14 @@ class Motion:
         return (1 - u) * self.cam_xy[k] + u * self.cam_xy[k + 1], (1 - u) * self.cam_yaw[k] + u * self.cam_yaw[k + 1]
 
 
-def pose_robots(hero, ghost, t, t_ghost):
+def pose_robots(items):
+    """items: one (motion or None, sim time) per env; a missing robot is parked under the floor."""
     poses, joints = [], []
-    for m, tt in ((hero, t), (ghost, t_ghost)):
+    items = list(items) + [(None, 0.0)] * (N_ENV - len(items))
+    for m, tt in items[:N_ENV]:
         if m is None:
-            if need_ghost:
-                poses.append([0.0, 0.0, -20.0, 0.0, 0.0, 0.0, 1.0])
-                joints.append(robot.data.default_joint_pos.torch[0].cpu().numpy())
+            poses.append([0.0, 0.0, -20.0, 0.0, 0.0, 0.0, 1.0])
+            joints.append(robot.data.default_joint_pos.torch[0].cpu().numpy())
             continue
         p, q, j = m.at(tt)
         poses.append(list(p) + list(q))
@@ -284,7 +312,10 @@ print("rtx defaults:", RTX_DEFAULT, flush=True)
 motions = {}
 for shot in shots:
     hero = motions.setdefault(shot["hero"], Motion(shot["hero"])) if shot.get("hero") else None
-    ghost = motions.setdefault(shot["ghost"], Motion(shot["ghost"])) if shot.get("ghost") else None
+    ghosts = ghost_list(shot)
+    gms = [motions.setdefault(g["motion"], Motion(g["motion"])) for g in ghosts]
+    ghost = gms[0] if gms else None
+    set_ghost_look(ghosts)
     od = os.path.join(args.out, shot["name"])
     os.makedirs(od, exist_ok=True)
     c = shot["cam"]
@@ -301,8 +332,9 @@ for shot in shots:
     log, w0 = [], time.time()
     for k in range(n):
         t = t0 + (t1 - t0) * (k / max(n - 1, 1)) if n > 1 else t0
-        tg = t + float(shot.get("ghost_offset", 0.0))
-        pose_robots(hero, ghost, t, tg)
+        tgs = [t + float(g["offset"]) for g in ghosts]
+        tg = tgs[0] if tgs else t
+        pose_robots([(hero, t)] + list(zip(gms, tgs)))
         lead = hero if hero is not None else ghost
         tl = t if hero is not None else tg
         rp_, rq, _ = lead.at(tl)
@@ -378,9 +410,17 @@ for shot in shots:
         Image.fromarray(np.ascontiguousarray(img[..., :3])).save(os.path.join(od, f"{k:05d}.jpg"), quality=94)
         dep = np.asarray(an_d.get_data(), np.float32).reshape(args.res, args.res)
         np.save(os.path.join(od, f"{k:05d}_d.npy"), dep[::4, ::4].astype(np.float16))
-        log.append({"k": k, "t": round(t, 4), "t_ghost": round(tg, 4), "eye": sm["eye"].round(4).tolist(),
+        robots = []
+        for m_, tt_ in [(hero, t)] + list(zip(gms, tgs)):
+            if m_ is None:
+                robots.append(None)
+                continue
+            p_, q_, _ = m_.at(tt_)
+            robots.append([round(float(p_[0]), 4), round(float(p_[1]), 4), round(yaw_of(q_), 4)])
+        log.append({"k": k, "t": round(t, 4), "t_ghost": round(tg, 4), "t_ghosts": [round(x, 4) for x in tgs],
+                    "eye": sm["eye"].round(4).tolist(),
                     "target": sm["tgt"].round(4).tolist(), "focal": float(c.get("focal", 18.0)),
-                    "robot": [float(rp_[0]), float(rp_[1]), float(ryaw)]})
+                    "robot": [float(rp_[0]), float(rp_[1]), float(ryaw)], "robots": robots})
         if k % 20 == 0:
             print(f"  {shot['name']} {k + 1}/{n} t {t:.1f} {(time.time() - w0) / (k + 1):.2f} s/frame", flush=True)
     json.dump({"shot": shot, "res": args.res, "fps": args.fps, "aperture": 20.955, "frames": log},
