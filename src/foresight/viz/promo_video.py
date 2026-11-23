@@ -31,6 +31,7 @@ RED = (255, 110, 96)
 TINT = {"depth_gt": GOOD, "depth_da": HOLO, "depth_noise": WARN, "depth_nofs": RED}
 NAMES = {"depth_gt": "TRUE DEPTH", "depth_da": "DEPTH ANYTHING", "depth_noise": "10% NOISE", "depth_nofs": "NO CALIBRATION"}
 # docs/results/depth_error_A.md (map navigator, set A): success %, depth AbsRel
+SYS_FRONT_S = 6.5  # seconds of sys_front used (tools/make_promo_video.py uses the same)
 STUDY = {"depth_gt": (83, 0.00), "depth_da": (79, 1.39), "depth_noise": (5, 0.08), "depth_nofs": (35, 1.42)}
 
 
@@ -315,9 +316,10 @@ class Film:
             ts = sorted({float(k) for x in looks for k in x["looks"]})
             slow = float(np.median(np.diff(ts))) if len(ts) > 2 else None
         a = self.sh["sys_front"]
+        a_len = min(a.length, SYS_FRONT_S)  # the front rig passes behind a kitchen counter after ~7 s
         for k in ks(n):
             tv = k / FPS
-            sh, ts_ = (a, tv) if tv < a.length else (self.sh["sys_shoulder"], tv - a.length)
+            sh, ts_ = (a, tv) if tv < a_len else (self.sh["sys_shoulder"], tv - a_len)
             img, ov, dm = self.frame(sh, ts_)
             t = sh.sim_t(ts_)
             x = r.tick(t)
@@ -327,20 +329,20 @@ class Film:
                 if tv > 5.0:
                     dots(ov, r.map_points(t), dm, GOOD, alpha=ease((tv - 5.0) / 1.0) * 0.8, size=1.8, max_n=6000)
                 pl = r.plan(t)
-                if pl is not None and tv > 9.0:
-                    ov.route(pl, tone="info", width=7, alpha=ease((tv - 9.0) / 0.8), pulse=(tv * 0.4) % 1.0)
+                if pl is not None and tv > a_len + 0.8:
+                    ov.route(pl, tone="info", width=7, alpha=ease((tv - a_len - 0.8) / 0.8), pulse=(tv * 0.4) % 1.0)
             if tv > 1.5:
                 ov.label([p[0], p[1], 1.45], "FAST", f"{1000 / max(fast or 100, 100):.0f} Hz" if fast else None,
                          sub="depth + map + safety, every frame", tone="info", side="left",
                          alpha=ease((tv - 1.5) / 0.6), lead_px=110, rise_px=90)
-            if tv > 13.0:
+            if tv > 11.0:
                 lk = r.look(t)
                 ov.label([p[0], p[1], 1.6], "SLOW", f"~{slow:.0f} s" if slow else None, sub="Qwen3-VL-2B looks",
-                         tone="good", side="right", alpha=ease((tv - 13.0) / 0.6), lead_px=110, rise_px=120)
+                         tone="good", side="right", alpha=ease((tv - 11.0) / 0.6), lead_px=110, rise_px=120)
                 if lk is not None:
                     lab, P, _ = lk
                     ov.label(P, lab.upper(), None, sub="seen by the vision model", tone="good",
-                             alpha=ease((tv - 14.0) / 0.6), lead_px=80, rise_px=70)
+                             alpha=ease((tv - 12.0) / 0.6), lead_px=80, rise_px=70)
             yield brand(ov.compose(img).convert("RGBA"))
 
     # ================================================================ 3. same robot, different depth
@@ -408,8 +410,9 @@ class Film:
         d = ImageDraw.Draw(out)
         for j, nm in enumerate(names):
             rr = self.R[nm]
-            t = min(rr.end - 0.5, 6.0 + 4.0 * u)
-            im, x = rr.pov(t)
+            # one frame per robot, held while its depth wipes across: the same start view (all four still face the
+            # bedroom at 7.2 s; later the cursor drifted onto a wall at an angle and the depth read as a bare ramp)
+            im, x = rr.pov(min(rr.end - 0.5, 7.2))
             if im is None:
                 continue
             tile = im.resize((half - 12, half - 12), Image.LANCZOS)
@@ -420,11 +423,12 @@ class Film:
             ox, oy = (j % 2) * half + 6, (j // 2) * half + 6
             out.paste(tile, (ox, oy))
             col = TINT[nm]
-            d.rounded_rectangle((ox + 18, oy + 18, ox + 18 + 430, oy + 18 + 112), radius=18, fill=(8, 22, 36, 200),
+            ly = oy + tile.height - 18 - 112  # bottom-left of the tile: the top-left one sits under the brand mark
+            d.rounded_rectangle((ox + 18, ly, ox + 18 + 430, ly + 112), radius=18, fill=(8, 22, 36, 200),
                                 outline=col + (255,), width=3)
-            d.text((ox + 38, oy + 30), NAMES[nm], font=font("display", 34, "SemiBold"), fill=INK + (255,))
+            d.text((ox + 38, ly + 12), NAMES[nm], font=font("display", 34, "SemiBold"), fill=INK + (255,))
             sr, ab = STUDY[nm]
-            d.text((ox + 38, oy + 76), f"error {ab:.2f} · {sr}% reach the goal", font=font("text", 26, "Medium"),
+            d.text((ox + 38, ly + 58), f"error {ab:.2f} · {sr}% reach the goal", font=font("text", 26, "Medium"),
                    fill=col + (255,))
         return out
 
@@ -453,8 +457,10 @@ class Film:
                 t = A.sim_t(tv)
                 tg = f["t_ghost"] + (t - f["t"])
                 gp = ghost.at(tg)
+                hit = ghost.crashed and tg >= ghost.event_t  # the COLLISION label takes over (the two overlapped)
                 ov.label([gp[0], gp[1], 1.15], "DEPTH ONLY", None, sub="same start, same goal", tone="info",
-                         alpha=ease((tv - 0.5) / 0.6), lead_px=70, rise_px=60)
+                         alpha=ease((tv - 0.5) / 0.6) * (1 - ease((tg - ghost.event_t) / 0.3) if hit else 1.0),
+                         lead_px=70, rise_px=60)
                 if ghost.crashed and tg >= ghost.event_t:
                     ov.label([MIRROR_X, gp[1], 1.0], "COLLISION", f"{ghost.event_t:.1f} s", tone="warn",
                              alpha=ease((tg - ghost.event_t) / 0.3), lead_px=80, rise_px=90)
@@ -470,13 +476,13 @@ class Film:
                 if quote:
                     ov.thought([h[0], h[1], 1.4], quote, alpha=ease((ts_ - 0.6) / 0.6) * (1 - ease((ts_ - 8.0) / 0.6)),
                                max_w_px=600)
+                # anchored on the robot: this camera looks out from the mirror, so the mirror itself is behind it
                 if verify_t is not None and t >= verify_t and (confirm_t is None or t < confirm_t):
-                    ov.label([MIRROR_X, h[1], 1.2], "MIRROR?", None, sub="checking again…", tone="warn",
-                             alpha=ease((t - verify_t) / 0.6), lead_px=90, rise_px=110)
+                    ov.label([h[0], h[1], 0.95], "MIRROR?", None, sub="stopped · checking again…", tone="warn",
+                             alpha=ease((ts_ - 0.3) / 0.6), lead_px=110, rise_px=40)
                 if confirm_t is not None and t >= confirm_t and walls:
-                    (a, b) = walls[0]
-                    ov.label([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, 0.05], "MIRROR", "wall added", tone="warn",
-                             alpha=ease((t - confirm_t) / 1.0), lead_px=90, rise_px=110)
+                    ov.label([h[0], h[1], 0.95], "MIRROR", "wall added", sub="marked on the map", tone="warn",
+                             alpha=ease((t - confirm_t) / 0.6), lead_px=110, rise_px=40)
             else:
                 ts_ = tv - A.length - B.length
                 img, ov, dm = self.frame(C, ts_)

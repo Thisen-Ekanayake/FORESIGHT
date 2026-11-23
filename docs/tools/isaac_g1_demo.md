@@ -79,7 +79,7 @@ tools/isaac/isaaclab_run.sh tools/isaac/replay_render.py --scene office --robot 
     --shots results/isaac/sonic/walk10_shot.json --out results/isaac/sonic/render --fps 30 --spp 64 --iso 14
 ```
 
-## Promo video "One Camera, No Map" (set up 2026-11-21, not yet run)
+## Promo video "One Camera, No Map" (set up 2026-11-21, run 2026-11-23)
 
 Plan (approved 2026-11-21): https://claude.ai/artifact/LZFmCoQ5rUzfAYmhpG3ahY (draft 2). A 2:15 square video of the
 whole project. Every walk is a live FORESIGHT run walked by SONIC (`g1_live.py --walker sonic`), re-rendered path
@@ -102,13 +102,21 @@ python tools/make_promo_video.py                  # 1920x1920 master: results/is
 | Segment | Live run(s) | Shots |
 |---|---|---|
 | Hook | `mirror_map` (depth-only, hallway mirror) + the existing phantom-room render (`results/isaac/phantom`) | `hook_dolly` + head-camera frames from `brain.pkl` |
-| One camera, two speeds | `search_v1` (the stretch before it finds the sofa: it is the run with live VLM looks) | `sys_front`, `sys_shoulder` |
-| Same robot, different depth | `depth_{gt,da,noise,nofs}` on A-study episode a-00808-04 | `depth_crane` (4 tinted robots, time-lapse), `depth_nofs_crash`, `depth_noise_stall`, a 2×2 grid of the depth each robot was given |
+| One camera, two speeds | `search_v1`, first half (1–24 s; the run with live VLM looks) | `sys_front` (first 6.5 s), `sys_shoulder` |
+| Same robot, different depth | `depth_{gt,da,noise,nofs}` on A-study episode a-00808-04 | `depth_crane` (the start, ×2), a 2×2 grid of the depth each robot was given, `depth_goal` (the finish from the goal, ×3), `depth_noise_stall` |
 | Mirror trap | `mirror_map`, `mirror_v1` (same start/goal as 2026-11-20) | `mirror_duel`, `mirror_check`, `mirror_exit` |
-| Find the sofa, then the bed | `search_v1` (episode mirror-sofa-bed) | `search_lapse` (time-lapse) |
+| Find the sofa | `search_v1` (episode s2-00808-sofa-1), second half at real speed | `search_lapse` |
 | End card | `search_v1` final pose | `end_pull` |
 
-What the promo does and doesn't claim (keep these true when it is run):
+Results of the 2026-11-23 runs (SONIC walking): mirror_map crashed into the mirror at 19.4 s; mirror_v1 flagged the
+mirror at 3.1 s, confirmed it and added a wall at 10.6 s, reached the goal at 56.5 s; on a-00808-04 GT reached at
+83.6 s, DA at 77.6 s, GT + 10% noise timed out frozen 10 m away, DA without calibration timed out lost 2.3 m short
+(the study's run crashed at 21 s). The first search episode, mirror-sofa-bed, crashed into the mirror at 31.7 s (the
+second look dismissed it; v1 also failed it in 2 of its 3 evaluation sets), kept as
+`live/search_mirror_sofa_bed_failed`; the search segment uses s2-00808-sofa-1 instead (v1 solved it in its
+evaluation), found the sofa at 53.0 s.
+
+What the promo does and doesn't claim (keep these true):
 
 - **The depth episode was picked.** a-00808-04 is the only A-study episode on 00808's main floor where the four
   depth sources did what the aggregate says (GT and DA reached, GT + 10% noise timed out, uncalibrated DA crashed at
@@ -119,7 +127,9 @@ What the promo does and doesn't claim (keep these true when it is run):
   (`tools/isaac/sonic_walker.py`: slow_walk at the commanded speed × `--sonic-speed-gain`, idle + facing angle for
   turning on the spot, the commanded heading kept within 0.8 rad of the actual one). SONIC runs on the CPU in these
   runs (GPU memory); the world is paused while the brain thinks, so that changes wall time only.
-- **Walking is shown at real speed** except the two time-lapses, which are labelled with their speed-up.
+- **Walking is shown at real speed** except the two four-robot shots (×2, ×3), which are labelled.
+- **Two episodes were swapped after a result**: the no-calibration robot timed out instead of crashing (kept, and the
+  labels say "never arrives"); the search episode was replaced after the mirror crash (both recorded above).
 - **System segment**: the "fast" rate and "slow" look interval on screen are the run's medians; the point cloud is
   the depth the navigator was given (floor-calibrated), back-projected, hidden behind the render's own depth.
 - The mirror segment says nothing about averages (the 2026-11-20 caveats above still apply: Habitat perception at

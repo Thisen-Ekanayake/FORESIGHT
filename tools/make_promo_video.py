@@ -24,7 +24,7 @@ from PIL import Image  # noqa: E402
 import foresight.viz.glass_demo_video as G  # noqa: E402
 from foresight.viz.glass_demo_video import FPS, S, mix_music  # noqa: E402
 from foresight.viz.mirror_trap_video import Voice  # noqa: E402
-from foresight.viz.promo_video import Film  # noqa: E402
+from foresight.viz.promo_video import SYS_FRONT_S, Film  # noqa: E402
 from foresight.viz.showcase_video import Writer  # noqa: E402
 
 # The plan's narration (draft 2). Numbers: docs/results/depth_error_A.md (5,600 runs; DA 79% vs GT 83% with floor
@@ -64,7 +64,7 @@ def plan(film, dur):
     """(segment, seconds, [(line, start s)]): each segment lasts as long as its shots or its narration needs."""
     L = lambda n: film.sh[n].length if n in film.sh else 0.0  # noqa: E731
     hook = max(12.0, dur["hook"] + 2.0)
-    system = max(L("sys_front") + L("sys_shoulder"), dur["sys1"] + dur["sys2"] + 2.5, 20.0)
+    system = max(min(L("sys_front"), SYS_FRONT_S) + L("sys_shoulder"), dur["sys1"] + dur["sys2"] + 2.5, 18.0)
     depth = max(L("depth_crane") + 7.0 + L("depth_goal") + L("depth_noise_stall"),
                 dur["depth1"] + dur["depth2"] + 3.0, 36.0)
     mirror = max(L("mirror_duel") + L("mirror_check") + L("mirror_exit"), dur["mirror1"] + dur["mirror2"] + 3.0, 26.0)

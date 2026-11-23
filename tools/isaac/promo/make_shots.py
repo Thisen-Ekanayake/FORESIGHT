@@ -93,7 +93,7 @@ def main():
     # ---- hook: a low dolly behind the depth-only robot, down the hallway into the mirror (it sees its reflection)
     g = R["mirror_map"]
     c = g.crash_t or g.end
-    add("hook_dolly", c - 2.0, hero=g.path(), t0=max(1.0, c - 9.0), t1=min(g.end, c + 1.5), speed=1.0,
+    add("hook_dolly", c - 2.0, hero=g.path(), t0=max(1.0, c - 5.0), t1=min(g.end, c + 1.5), speed=1.0,
         cam=follow(back=2.1, side=0.3, height=0.35, ahead=1.6, focal=16))
 
     # ---- system: the object-search run (FORESIGHT v1: Depth Anything, its map and plan, and live Qwen3-VL looks,
@@ -104,7 +104,10 @@ def main():
     add("sys_front", 6.0, hero=d.path(), t0=1.0, t1=12.0, speed=1.0,
         cam={"mode": "rig", "offset": [2.4, 1.0, 0.25], "look": [0.3, 0.0, -0.1], "focal": 18, "smooth": 0.06})
     add("sys_shoulder", 18.0, hero=d.path(), t0=12.0, t1=split, speed=1.0,
-        cam=follow(back=1.8, side=0.7, height=0.95, ahead=1.6, focal=15))
+        # fixed, from behind the kitchen doorway: the robot scans on the spot for most of 12-21 s, and a follow
+        # camera swung through the fridge and cabinets (2026-11-23 render); this eye was picked from four stills
+        cam={"mode": "fixed", "eye": [-1.9, -3.0, 1.7], "target": [-0.4, -2.9, 0.7], "track": 0.6, "focal": 12,
+             "smooth": 0.05})
 
     # ---- depth centrepiece: four coloured robots set off from one start (x2), the finish seen from the goal (x3),
     # then a real-time look at the noise robot frozen in place
