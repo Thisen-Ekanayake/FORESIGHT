@@ -95,7 +95,7 @@ python tools/isaac/promo/make_shots.py      # shot list timed from the runs' eve
 tools/isaac/promo/render.sh stills          # one still per shot, 32 vs 64 spp side by side (look check)
 tools/isaac/promo/render.sh full 32         # (or 64) every shot, resumable, ~12 h at 32 spp / ~23 h at 64
 python tools/make_promo_video.py --preview 40     # spot-check composed frames
-python tools/make_promo_video.py --scale 0.5      # 960x960 preview cut for sign-off
+python tools/make_promo_video.py --scale 0.5      # 960x960 preview cut (optional)
 python tools/make_promo_video.py                  # 1920x1920 master: results/isaac/promo/foresight_promo.mp4
 ```
 
@@ -115,6 +115,15 @@ mirror at 3.1 s, confirmed it and added a wall at 10.6 s, reached the goal at 56
 second look dismissed it; v1 also failed it in 2 of its 3 evaluation sets), kept as
 `live/search_mirror_sofa_bed_failed`; the search segment uses s2-00808-sofa-1 instead (v1 solved it in its
 evaluation), found the sofa at 53.0 s.
+
+Production (2026-11-23): `render.sh full 32` took ~6.5 h (3,430 frames, ~6.75 s/frame). Fixes after looking at
+the footage: `hook_dolly` and `mirror_exit` begin with the follow camera inside a wall (the next bedroom; the kitchen
+cabinets), so their first 120 and 90 frames were trimmed (frames hard-linked into `film/<shot>/` with renumbered
+`frames.json`; the full renders are kept as `film/<shot>_full`). If they are re-rendered, trim again or move t0
+later. `sys_shoulder` was re-rendered with a fixed camera from behind the kitchen doorway (chosen from 4 candidate
+stills, `results/isaac/promo/stills_cand`), because the follow camera went through the fridge while the robot scanned
+on the spot. The master is 2:08 (128 s), audio loudness-normalized (~-18 LUFS, -1.5 dB true peak):
+`results/isaac/promo/foresight_promo.mp4`.
 
 What the promo does and doesn't claim (keep these true):
 

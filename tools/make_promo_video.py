@@ -146,8 +146,11 @@ def main():
     vo.write_mix(vwav, total)
     mwav = out.with_name(out.stem + ".mix.wav")
     mix_music(vwav, ROOT / a.music, mwav, total, spans)
-    subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(silent), "-i", str(mwav), "-c:v", "copy", "-c:a", "aac",
-                    "-b:a", "192k", "-movflags", "+faststart", "-shortest", str(out)], check=True)
+    # loudnorm: the raw mix sits at -21 LUFS, quiet next to other LinkedIn video; the -1.5 dB true-peak ceiling
+    # holds it near -18 LUFS (master, 2026-11-23)
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(silent), "-i", str(mwav), "-c:v", "copy",
+                    "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "48000", "-c:a", "aac", "-b:a", "192k",
+                    "-movflags", "+faststart", "-shortest", str(out)], check=True)
     for f in (silent, vwav, mwav):
         f.unlink()
     print(f"wrote {out} ({total:.1f} s)")

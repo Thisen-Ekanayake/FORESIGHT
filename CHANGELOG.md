@@ -3,7 +3,16 @@
 Notable changes to FORESIGHT, newest first. Day-by-day working notes live in `logs/` (untracked);
 milestone status in `PROGRESS.md`.
 
-## [Unreleased] — Promo video "One Camera, No Map": live SONIC runs and compositor (2026-11-21, set up, not run)
+## [Unreleased] — Promo video "One Camera, No Map": live SONIC runs and compositor (set up 2026-11-21, produced 2026-11-23)
+
+### Produced (2026-11-23)
+- The master, `results/isaac/promo/foresight_promo.mp4`: 1920², 30 fps, 2:08, Kokoro af_heart narration plus music,
+  loudness-normalized. Seven live SONIC runs (all passed `check_runs.py`), 11 path-traced shots at 32 spp.
+- Search segment uses episode s2-00808-sofa-1 ("Find the sofa") after mirror-sofa-bed crashed into the mirror; the
+  no-calibration robot timed out rather than crashing ("never arrives"). Both are recorded in the docs.
+- Compositor fixes from the full render: the depth grid holds each robot's 7.2 s frame (the moving cursor landed on a
+  wall), its labels sit at the tile bottoms; DEPTH ONLY fades when COLLISION appears; the mirror check's labels are
+  anchored on the robot (the mirror is behind that camera); `sys_shoulder` uses a fixed camera; audio loudnorm.
 
 ### Added
 - `tools/isaac/sonic_walker.py`: `SonicWorld`, SONIC's G1 in a plain Isaac Lab sim driven by FORESIGHT's
