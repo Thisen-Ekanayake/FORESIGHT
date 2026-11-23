@@ -79,7 +79,7 @@ parser.add_argument("--walker", default="isaaclab", choices=["isaaclab", "sonic"
                          "planner + tracking policy on SONIC's own G1 (tools/isaac/sonic_walker.py), human-like gait")
 parser.add_argument("--wbc", default="/ml/GR00T-WholeBodyControl", help="sonic: GR00T-WholeBodyControl checkout")
 parser.add_argument("--sonic-seed", type=int, default=1234, help="sonic: planner random seed")
-parser.add_argument("--sonic-speed-gain", type=float, default=0.77,
+parser.add_argument("--sonic-speed-gain", type=float, default=1.0,
                     help="sonic: FORESIGHT speed x this = SONIC slow_walk speed setting (it overshoots its setting)")
 parser.add_argument("--sonic-cpu", action="store_true", help="sonic: run the ONNX planner/policy on the CPU (GPU memory)")
 parser.add_argument("--task", default="pointnav", choices=["pointnav", "search"],

@@ -16,7 +16,7 @@
 #              Depth Anything without floor calibration (the "same robot, different depth" centrepiece; the DA run
 #              also serves the "one camera, two speeds" segment)
 #   depth_alt  fallback episodes (a-00808-07, a-00808-03), only if a-00808-04 doesn't show the study's pattern
-#   search     "find the sofa, then the bed" (FORESIGHT v1 object search, the mirror-sofa-bed episode)
+#   search     "find the sofa" (FORESIGHT v1 object search, episode s2-00808-sofa-1)
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
 ROOT=$PWD
@@ -100,9 +100,12 @@ stage_depth_alt() {
 }
 stage_search() {
   start_brain
-  # the object search episode "mirror-sofa-bed" (tools/run_object_search.py): Habitat yaw -89.1 -> Isaac 0.9
-  run search_v1 --task search --instructions sofa bed --cond foresight_v1 --max-linear 0.35 --max-sim-s 300 \
-      --start -2.592 -0.290 0.9
+  # Object search s2-00808-sofa-1 (experiments/configs/object_search/episodes_2027.json; FORESIGHT v1 found the sofa
+  # in its evaluation, 48.6 s). Picked after the first choice, mirror-sofa-bed, crashed into the hallway mirror with
+  # SONIC (2026-11-23: the second look dismissed the mirror; v1 also failed that episode in 2 of its 3 sets).
+  # That run is kept in live/search_mirror_sofa_bed_failed. Habitat (x, z) -> Isaac (x, -z), yaw -150.3 + 90.
+  run search_v1 --task search --instructions sofa --cond foresight_v1 --max-linear 0.35 --max-sim-s 180 \
+      --start -0.584 -3.036 -60.3
 }
 
 check_gpu

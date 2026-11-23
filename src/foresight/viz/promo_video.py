@@ -56,6 +56,8 @@ class Run:
         hit = [w for w in self.result.split() if w.replace(".", "", 1).isdigit()]
         self.event_t = float(hit[0]) if hit else self.end
         self.crashed = self.result.startswith("crash")
+        a = m.get("args") or {}
+        self.goal = None if a.get("task") == "search" else a.get("goal")
         self.reached = self.result.startswith("reached")
 
     def at(self, t):
@@ -368,8 +370,8 @@ class Film:
                     if t >= rr.event_t - 0.05 and (rr.crashed or rr.reached):
                         title = "COLLISION" if rr.crashed else "GOAL"
                         tone = "warn" if rr.crashed else "good"
-                    elif t >= rr.end - 0.05:
-                        title, tone = "STALLED", "warn"
+                    elif t >= rr.end - 0.05:  # out of time: frozen in place (noise) or lost (no calibration)
+                        title, tone = ("STALLED", "warn") if nm == "depth_noise" else ("NEVER ARRIVES", "warn")
                     else:
                         title, tone = NAMES[nm], "info"
                     ov.label([p[0], p[1], 1.35], title, None, sub=NAMES[nm].lower() if title != NAMES[nm] else None,
@@ -391,12 +393,15 @@ class Film:
                     dots(ov, rr.cloud(x), dm, WARN, alpha=ease((ts_ - 0.8) / 0.6) * 0.9)
                     ov.label([p[0], p[1], 1.4], NAMES[nm], f"error {STUDY[nm][1]:.2f}", sub="walls everywhere",
                              tone="warn", alpha=ease((ts_ - 1.0) / 0.6), lead_px=80, rise_px=70)
-                else:
+                else:  # no calibration: a crash, or (as on a-00808-04 with SONIC) lost short of the goal
                     hit = t >= rr.event_t and rr.crashed
+                    gd = float(np.hypot(*(np.array(rr.goal) - p[:2]))) if rr.goal is not None else None
                     ov.label([p[0], p[1], 1.4], "COLLISION" if hit else NAMES[nm],
-                             f"{rr.event_t:.1f} s" if hit else f"error {STUDY[nm][1]:.2f}",
-                             sub="2× off in scale, never calibrated", tone="warn",
+                             f"{rr.event_t:.1f} s" if hit else (f"{gd:.1f} m short" if gd is not None else None),
+                             sub="depth 2× off in scale, never calibrated", tone="warn",
                              alpha=ease((ts_ - 0.6) / 0.6), lead_px=80, rise_px=70)
+                    if rr.goal is not None and not hit:
+                        ov.ring([rr.goal[0], rr.goal[1], 0.02], 0.4, "good", t=tv)
                 yield brand(ov.compose(img).convert("RGBA"))
 
     def _depth_grid(self, names, u):
@@ -489,31 +494,40 @@ class Film:
             im = brand(ov.compose(img).convert("RGBA"))
             yield chip(im, "REAL HOME · 3D-SCANNED", ease(tv / 0.8) * (1 - ease((tv - 3.0) / 0.6)))
 
-    # ================================================================ 5. "find the sofa, then the bed"
+    # ================================================================ 5. "find the sofa" (s2-00808-sofa-1)
     def seg_search(self, n, cues):
         if not self.has("search_lapse") or "search_v1" not in self.R:
-            yield from self.missing(n, "Find the sofa, then the bed")
+            yield from self.missing(n, "Find the sofa")
             return
         r = self.R["search_v1"]
         L = self.sh["search_lapse"]
         found = r.found()
         speed = (L.f[-1]["t"] - L.f[0]["t"]) / max(L.length, 1e-6) if L.n > 1 else 1.0
+        instr = (r.B.get("header") or {}).get("instructions") or ["sofa"]
+        words = "Find the " + ", then the ".join(instr) + "."
         for k in ks(n):
             tv = k / FPS
-            img, ov, dm = self.frame(L, min(tv, L.length - 1e-3))
-            t = L.sim_t(min(tv, L.length - 1e-3))
+            tl = min(tv, L.length - 1e-3)
+            img, ov, dm = self.frame(L, tl)
+            t = L.sim_t(tl)
             x = r.tick(t)
+            lk = r.look(t, labels=instr)
+            if lk is not None and not any(t >= tf for tf, _, _ in found):  # sighted, not yet confirmed
+                lab, P, tk = lk
+                ov.label(P, lab.upper(), "seen", sub="the vision model, this look", tone="info",
+                         alpha=ease((t - tk) / 0.6), lead_px=80, rise_px=80)
             for tf, lab, P in found:
                 if t >= tf:
                     ov.ring([P[0], P[1], 0.02], 0.45, "good", t=tv)
-                    ov.label([P[0], P[1], 0.8], lab.upper(), "found", sub=f"at {tf:.0f} s", tone="good",
-                             alpha=ease((t - tf) / (1.0 * speed)), lead_px=80, rise_px=90)
-            if x is not None and t > 3:
+                    ov.label([P[0], P[1], 0.8], lab.upper(), "found", sub=f"{tf:.0f} s · no map, no coordinates",
+                             tone="good", alpha=ease((t - tf) / 0.8), lead_px=80, rise_px=90)
+            if x is not None:
                 dots(ov, r.map_points(t), dm, GOOD, alpha=0.55, size=1.6, max_n=5000)
             im = brand(ov.compose(img).convert("RGBA"))
-            im = speed_chip(im, f"TIME-LAPSE ×{speed:.0f} · {t:4.0f} s", 1.0)
+            if speed > 1.5:
+                im = speed_chip(im, f"TIME-LAPSE ×{speed:.0f}", 1.0)
             # the spoken goal, as on-screen words with a waveform (the user's choice, 2026-11-21)
-            yield caption(im, "“Find the sofa. Then the bed.”", alpha=ease(tv / 0.5) * (1 - ease((tv - 5.5) / 0.6)))
+            yield caption(im, f"“{words}”", alpha=ease(tv / 0.5) * (1 - ease((tv - 5.5) / 0.6)))
 
     # ================================================================ 6. end card
     def seg_end(self, n, cues):

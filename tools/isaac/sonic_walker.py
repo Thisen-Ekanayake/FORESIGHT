@@ -10,9 +10,10 @@ Command mapping (as SONIC's own gamepad deploy: left stick = move, right stick =
   forward v <  v_min   idle (stand) facing the commanded heading: turning on the spot
   yaw rate w           integrates the commanded heading, kept within +-lead rad of the robot's actual heading so a
                        held turn can't wind up past what the robot can follow
-speed_gain: SONIC's slow_walk overshoots its speed setting (0.4 -> ~0.5 m/s in the office, 0.5 -> 0.70 m/s on a
-plane, 2026-11-21), so FORESIGHT's speeds are scaled down to come out at about the commanded speed. Re-measure it
-with the probe in docs/tools/isaac_g1_demo.md before relying on it.
+speed_gain: FORESIGHT speed x gain = the slow_walk speed setting. In the scanned home (probe, 2026-11-23) SONIC
+walked at its setting (0.27 -> 0.27 m/s), so the default is 1.0. (It overshot on the office test: 0.4 -> ~0.5 m/s.)
+spawn_z 0.80: just above SONIC's standing height (0.789 m). Spawned lower (0.76), the feet start inside the scan's
+triangle-mesh floor and the depenetration knocks the robot over in 0.5 s (a plane forgives it).
 """
 from __future__ import annotations
 
@@ -59,8 +60,8 @@ class SonicWorld:
     dt = 0.02
 
     def __init__(self, *, wbc: str, root: str, scene_usd: str | None, start, device: str = "cuda:0", seed: int = 1234,
-                 gpu_onnx: bool = True, speed_gain: float = 0.77, v_min: float = 0.06, lead: float = 0.8,
-                 replan: int = 5):
+                 gpu_onnx: bool = True, speed_gain: float = 1.0, v_min: float = 0.06, lead: float = 0.8,
+                 replan: int = 5, spawn_z: float = 0.80):
         import torch
         import isaaclab.sim as sim_utils
         from isaaclab.assets import Articulation
@@ -69,10 +70,14 @@ class SonicWorld:
         self.torch, self.device = torch, device
         self.speed_gain, self.v_min, self.lead, self.replan_every = speed_gain, v_min, lead, replan
         simcfg = sim_utils.SimulationCfg(dt=0.005, render_interval=4, device=device)
-        px = getattr(simcfg, "physics", None) or getattr(simcfg, "physx", None)
-        for k, v in PHYSX_SMALL.items():  # buffers for one robot, not thousands (frees GPU memory for the VLM)
-            if px is not None and hasattr(px, k):
+        # PhysX buffers for one robot, not thousands (~2.5 GB otherwise): SimulationCfg.physics is None by default in
+        # Isaac Lab 3 (the manager envs fill it in), so give it a PhysxCfg of our own
+        from isaaclab_physx.physics.physx_manager_cfg import PhysxCfg
+        px = PhysxCfg()
+        for k, v in PHYSX_SMALL.items():
+            if hasattr(px, k):
                 setattr(px, k, v)
+        simcfg.physics = px
         self.sim = sim_utils.SimulationContext(simcfg)
         TerrainImporter(TerrainImporterCfg(prim_path="/World/ground", terrain_type="plane", collision_group=-1, num_envs=1,
                                            env_spacing=0.0,
@@ -83,7 +88,7 @@ class SonicWorld:
             sim_utils.UsdFileCfg(usd_path=scene_usd).func("/World/Set", sim_utils.UsdFileCfg(usd_path=scene_usd))
         rcfg = robot_cfg(wbc, root)
         x0, y0, yaw0 = start
-        rcfg.init_state.pos = (x0, y0, 0.76)
+        rcfg.init_state.pos = (x0, y0, spawn_z)
         rcfg.init_state.rot = (0.0, 0.0, math.sin(yaw0 / 2), math.cos(yaw0 / 2))  # Isaac Lab 3: x y z w
         self.robot = Articulation(rcfg)
         self.sim.reset()

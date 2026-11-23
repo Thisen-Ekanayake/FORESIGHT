@@ -97,13 +97,13 @@ def main():
         cam=follow(back=2.1, side=0.3, height=0.35, ahead=1.6, focal=16))
 
     # ---- system: the object-search run (FORESIGHT v1: Depth Anything, its map and plan, and live Qwen3-VL looks,
-    # so every AR layer, including the VLM label, is the run's own), the stretch before it finds the sofa
+    # so every AR layer, including the VLM label, is the run's own): its first half; the search segment shows the
+    # second half (spotting and reaching the sofa), so no stretch of the run appears twice
     d = R["search_v1"]
-    tf0 = next((t for t, lab in d.found() if lab == "sofa"), d.end / 2)
-    a0 = max(2.0, tf0 - 27.0)
-    add("sys_front", a0 + 6.0, hero=d.path(), t0=a0, t1=a0 + 12.0, speed=1.0,
+    split = min(24.0, d.end / 2)
+    add("sys_front", 6.0, hero=d.path(), t0=1.0, t1=12.0, speed=1.0,
         cam={"mode": "rig", "offset": [2.4, 1.0, 0.25], "look": [0.3, 0.0, -0.1], "focal": 18, "smooth": 0.06})
-    add("sys_shoulder", a0 + 18.0, hero=d.path(), t0=a0 + 12.0, t1=min(d.end, a0 + 23.0), speed=1.0,
+    add("sys_shoulder", 18.0, hero=d.path(), t0=12.0, t1=split, speed=1.0,
         cam=follow(back=1.8, side=0.7, height=0.95, ahead=1.6, focal=15))
 
     # ---- depth centrepiece: four coloured robots from one start (time-lapse), then two real-time close-ups
@@ -145,11 +145,11 @@ def main():
     add("mirror_exit", h.end - 3.0, hero=h.path(), t0=max(1.0, h.end - 11.0), t1=h.end, speed=1.0,
         cam=follow(back=1.9, side=0.5, height=0.6, ahead=1.2, focal=14))
 
-    # ---- search: time-lapse of the whole search, then the end-card pull-back
+    # ---- search: the second half of the search at real speed (spotting the sofa, walking over), then the pull-back
     s = R["search_v1"]
-    lapse_s = 20.0
-    add("search_lapse", s.end / 2, hero=s.path(), t0=1.0, t1=s.end, speed=(s.end - 1.0) / lapse_s,
-        cam=follow(back=2.6, side=0.6, height=1.3, ahead=1.0, focal=14, smooth=0.04), timelapse=True)
+    tf = next((t for t, lab in s.found() if lab == "sofa"), s.end)
+    add("search_lapse", tf - 2.0, hero=s.path(), t0=max(split, s.end - 22.0), t1=s.end, speed=1.0,
+        cam=follow(back=2.6, side=0.6, height=1.3, ahead=1.0, focal=14, smooth=0.04))
     pe, ye = s.at(s.end)
     fwd = np.array([math.cos(ye), math.sin(ye)])
     e0 = np.array(pe[:2]) + 1.4 * fwd
