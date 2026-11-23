@@ -65,7 +65,7 @@ def plan(film, dur):
     L = lambda n: film.sh[n].length if n in film.sh else 0.0  # noqa: E731
     hook = max(12.0, dur["hook"] + 2.0)
     system = max(L("sys_front") + L("sys_shoulder"), dur["sys1"] + dur["sys2"] + 2.5, 20.0)
-    depth = max(L("depth_crane") + 7.0 + L("depth_nofs_crash") + L("depth_noise_stall"),
+    depth = max(L("depth_crane") + 7.0 + L("depth_goal") + L("depth_noise_stall"),
                 dur["depth1"] + dur["depth2"] + 3.0, 36.0)
     mirror = max(L("mirror_duel") + L("mirror_check") + L("mirror_exit"), dur["mirror1"] + dur["mirror2"] + 3.0, 26.0)
     search = max(min(L("search_lapse"), 24.0), dur["search"] + 6.5, 20.0)

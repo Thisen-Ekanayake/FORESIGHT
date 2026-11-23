@@ -106,35 +106,40 @@ def main():
     add("sys_shoulder", 18.0, hero=d.path(), t0=12.0, t1=split, speed=1.0,
         cam=follow(back=1.8, side=0.7, height=0.95, ahead=1.6, focal=15))
 
-    # ---- depth centrepiece: four coloured robots from one start (time-lapse), then two real-time close-ups
+    # ---- depth centrepiece: four coloured robots set off from one start (x2), the finish seen from the goal (x3),
+    # then a real-time look at the noise robot frozen in place
     runs4 = ["depth_gt", "depth_da", "depth_noise", "depth_nofs"]
-    T4 = max(R[n].end for n in runs4)
+    ghosts4 = [{"motion": R[n].path(), "tint": TINT[n], "opacity": 0.5, "offset": 0.0} for n in runs4]
     s0, _ = R["depth_gt"].at(0.0)
     s1, _ = R["depth_gt"].at(R["depth_gt"].end)
     mid = (np.array(s0) + np.array(s1)) / 2
     away = np.array(s0[:2]) - mid[:2]
     away = away / (np.linalg.norm(away) + 1e-9)
     eye = [float(s0[0] + 1.2 * away[0]), float(s0[1] + 1.2 * away[1]), 2.15]  # behind the start, under the ceiling
-    crane_s = 14.0
-    add("depth_crane", 0.4 * T4, hero=None, t0=0.0, t1=T4, speed=T4 / crane_s,
-        ghosts=[{"motion": R[n].path(), "tint": TINT[n], "opacity": 0.5, "offset": 0.0} for n in runs4],
-        cam={"mode": "fixed", "eye": eye, "target": [float(mid[0]), float(mid[1]), 0.6], "track": 0.25, "focal": 14,
+    add("depth_crane", 8.0, hero=None, t0=0.0, t1=16.0, speed=2.0, ghosts=ghosts4,
+        cam={"mode": "fixed", "eye": eye, "target": [float(mid[0]), float(mid[1]), 0.6], "track": 0.55, "focal": 14,
              "smooth": 0.05}, timelapse=True)
-    n_ = R["depth_nofs"]
-    cn = n_.crash_t or n_.end
-    add("depth_nofs_crash", cn - 1.0, hero=n_.path(), t0=max(1.0, cn - 6.0), t1=min(n_.end, cn + 1.5), speed=1.0,
-        cam=follow(back=2.0, side=-0.6, height=0.7, ahead=1.4, focal=16))
+    # the finish: from just past the goal, looking back the way they come; the uncalibrated robot ends up dithering
+    # short of the goal in the same view
+    goal = np.array(R["depth_gt"].m["args"]["goal"], float)
+    pn, _ = R["depth_nofs"].at(R["depth_nofs"].end)
+    back = goal - np.array(pn[:2])
+    back = back / (np.linalg.norm(back) + 1e-9)
+    e2 = goal + 0.6 * back
+    tgt2 = (goal + np.array(pn[:2])) / 2
+    t_arr = max(R["depth_gt"].event_t or 0, R["depth_da"].event_t or 0)
+    add("depth_goal", t_arr - 3.0, hero=None, t0=max(0.0, t_arr - 24.0), t1=t_arr + 4.0, speed=3.0, ghosts=ghosts4,
+        cam={"mode": "fixed", "eye": [float(e2[0]), float(e2[1]), 1.9], "target": [float(tgt2[0]), float(tgt2[1]), 0.5],
+             "track": 0.0, "focal": 12, "smooth": 0.05}, timelapse=True)
     z = R["depth_noise"]
-    tz = min(z.end - 1.0, 25.0)  # stalled by then (the study: it creeps and stops in front of phantom obstacles)
-    pz, _ = z.at(tz)
+    tz = min(z.end - 1.0, 25.0)  # frozen by then: noise reads phantom obstacles everywhere
     add("depth_noise_stall", tz, hero=z.path(), t0=tz - 4.0, t1=tz + 4.0, speed=1.0,
-        cam={"mode": "orbit", "center": [float(pz[0]), float(pz[1]), 0.9], "radius": 1.9, "height": 0.6,
-             "deg0": 200.0, "deg1": 260.0, "focal": 16})
+        cam=follow(back=1.8, side=0.5, height=0.75, ahead=1.6, focal=15))
 
     # ---- mirror: the duel (same start, same goal), the second look, the way round (camera spots from 2026-11-20)
     h = R["mirror_v1"]
     add("mirror_duel", c - 1.0, hero=h.path(), ghost=g.path(), t0=max(1.0, c - 10.0), t1=c + 1.5, speed=1.0,
-        cam={"mode": "fixed", "eye": [-3.12, 0.72, 1.65], "target": [-0.6, -0.4, 1.0], "track": 0.35, "focal": 15,
+        cam={"mode": "fixed", "eye": [-3.12, 0.72, 1.65], "target": [-0.6, -0.4, 1.0], "track": 0.25, "focal": 12,
              "smooth": 0.08})
     conf = (h.events("confirmed") or [None])[0]
     ver = h.first("verifying")

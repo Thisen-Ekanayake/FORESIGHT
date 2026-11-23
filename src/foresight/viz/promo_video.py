@@ -345,63 +345,60 @@ class Film:
 
     # ================================================================ 3. same robot, different depth
     def seg_depth(self, n, cues):
+        """The start (x2, four tinted robots), each robot's depth side by side, the finish from the goal (x3), the
+        noise robot frozen (real time)."""
         need = ["depth_gt", "depth_da", "depth_noise", "depth_nofs"]
         if not self.has("depth_crane") or any(q not in self.R for q in need):
             yield from self.missing(n, "Same robot, different depth")
             return
-        crane = self.sh["depth_crane"]
         grid_len = 7.0
-        close = [s for s in ("depth_nofs_crash", "depth_noise_stall") if s in self.sh]
-        lens = [crane.length, grid_len] + [self.sh[s].length for s in close]
+        seq = [("multi", self.sh["depth_crane"]), ("grid", None)]
+        seq += [("multi", self.sh["depth_goal"])] if "depth_goal" in self.sh else []
+        seq += [("stall", self.sh["depth_noise_stall"])] if "depth_noise_stall" in self.sh else []
+        lens = [sh.length if sh is not None else grid_len for _, sh in seq]
         starts = np.cumsum([0.0] + lens)
-        speed = crane.f[-1]["t"] / max(crane.length, 1e-6) if crane.n else 1.0
         for k in ks(n):
             tv = k / FPS
-            i = int(np.searchsorted(starts, tv, side="right") - 1)
-            ts_ = tv - starts[min(i, len(starts) - 1)]
-            if i == 0:  # crane, time-lapse: four robots, one start
-                img, ov, dm = self.frame(crane, ts_)
-                f = crane.frame(ts_)
+            i = min(int(np.searchsorted(starts, tv, side="right") - 1), len(seq) - 1)
+            ts_ = tv - starts[i]
+            kind, sh = seq[i]
+            if kind == "grid":
+                yield brand(self._depth_grid(need, ts_ / grid_len))
+                continue
+            img, ov, dm = self.frame(sh, ts_)
+            f = sh.frame(ts_)
+            if kind == "multi":
                 tg = f.get("t_ghosts") or [f["t"]] * 4
+                speed = (sh.f[-1]["t"] - sh.f[0]["t"]) / max(sh.length, 1e-6) if sh.n > 1 else 1.0
                 for j, nm in enumerate(need):
                     rr = self.R[nm]
                     t = tg[j] if j < len(tg) else f["t"]
                     p = rr.at(t)
                     if t >= rr.event_t - 0.05 and (rr.crashed or rr.reached):
-                        title = "COLLISION" if rr.crashed else "GOAL"
-                        tone = "warn" if rr.crashed else "good"
-                    elif t >= rr.end - 0.05:  # out of time: frozen in place (noise) or lost (no calibration)
+                        title, tone = ("COLLISION", "warn") if rr.crashed else ("GOAL", "good")
+                    elif t >= rr.end - 0.05:
                         title, tone = ("STALLED", "warn") if nm == "depth_noise" else ("NEVER ARRIVES", "warn")
                     else:
                         title, tone = NAMES[nm], "info"
                     ov.label([p[0], p[1], 1.35], title, None, sub=NAMES[nm].lower() if title != NAMES[nm] else None,
                              tone=tone, side="left" if j % 2 else "right", alpha=ease((ts_ - 0.6) / 0.6),
                              lead_px=60, rise_px=40 + 30 * j, scale=0.85)
+                if i > 1:  # the finish: the goal ring
+                    g = self.R["depth_gt"].goal
+                    if g is not None:
+                        ov.ring([g[0], g[1], 0.02], 0.4, "good", t=tv)
                 im = brand(ov.compose(img).convert("RGBA"))
-                yield speed_chip(im, f"TIME-LAPSE ×{speed:.0f}", ease(ts_ / 0.6))
-            elif i == 1:  # what each robot was given: its depth map, side by side, at the same moment
-                yield brand(self._depth_grid(need, ts_ / grid_len))
-            else:
-                sh = self.sh[close[i - 2]]
-                img, ov, dm = self.frame(sh, ts_)
-                nm = "depth_nofs" if "nofs" in sh.d.name else "depth_noise"
-                rr = self.R[nm]
+                yield speed_chip(im, f"SAME START · ×{speed:.0f}" if i == 0 else f"THE FINISH · ×{speed:.0f}",
+                                 ease(ts_ / 0.6))
+            else:  # the noise robot, frozen in front of the phantom obstacles its depth puts on the floor
+                rr = self.R["depth_noise"]
                 t = sh.sim_t(ts_)
                 p = rr.at(t)
                 x = rr.tick(t)
-                if nm == "depth_noise" and x is not None:  # the phantom obstacles noise puts on the floor
+                if x is not None:
                     dots(ov, rr.cloud(x), dm, WARN, alpha=ease((ts_ - 0.8) / 0.6) * 0.9)
-                    ov.label([p[0], p[1], 1.4], NAMES[nm], f"error {STUDY[nm][1]:.2f}", sub="walls everywhere",
-                             tone="warn", alpha=ease((ts_ - 1.0) / 0.6), lead_px=80, rise_px=70)
-                else:  # no calibration: a crash, or (as on a-00808-04 with SONIC) lost short of the goal
-                    hit = t >= rr.event_t and rr.crashed
-                    gd = float(np.hypot(*(np.array(rr.goal) - p[:2]))) if rr.goal is not None else None
-                    ov.label([p[0], p[1], 1.4], "COLLISION" if hit else NAMES[nm],
-                             f"{rr.event_t:.1f} s" if hit else (f"{gd:.1f} m short" if gd is not None else None),
-                             sub="depth 2× off in scale, never calibrated", tone="warn",
-                             alpha=ease((ts_ - 0.6) / 0.6), lead_px=80, rise_px=70)
-                    if rr.goal is not None and not hit:
-                        ov.ring([rr.goal[0], rr.goal[1], 0.02], 0.4, "good", t=tv)
+                ov.label([p[0], p[1], 1.4], NAMES["depth_noise"], f"error {STUDY['depth_noise'][1]:.2f}",
+                         sub="sees walls everywhere", tone="warn", alpha=ease((ts_ - 1.0) / 0.6), lead_px=80, rise_px=70)
                 yield brand(ov.compose(img).convert("RGBA"))
 
     def _depth_grid(self, names, u):

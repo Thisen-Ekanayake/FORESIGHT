@@ -11,7 +11,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
 P=results/isaac/promo
-RR="tools/isaac/isaaclab_run.sh tools/isaac/replay_render.py --scene hm3d --robot sonic --res 1440 --fps 30 --iso ${ISO:-14}"
+RR="tools/isaac/isaaclab_run.sh tools/isaac/replay_render.py --scene hm3d --robot sonic --res 1440 --fps 30 --iso ${ISO:-20}"
 mode=${1:-stills}
 
 used=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1)
